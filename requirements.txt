@@ -1,0 +1,18 @@
+# Azure Production Pipeline Requirements
+
+# Web Crawling
+crawl4ai>=0.3.0
+playwright>=1.40.0
+
+# AI/ML
+openai>=1.0.0
+gpt-researcher>=0.7.0
+langchain>=0.1.0
+langchain-community>=0.0.10
+
+# Database
+psycopg2-binary>=2.9.9
+
+# Utilities
+requests>=2.31.0
+python-dotenv>=1.0.0
