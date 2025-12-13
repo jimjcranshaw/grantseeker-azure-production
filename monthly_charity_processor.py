@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 # Directory Structure
-BASE_DIR = Path("/data")
+BASE_DIR = Path("./data")
 RAW_DOWNLOADS_DIR = BASE_DIR / "raw_downloads"
 PROCESSED_DIR = BASE_DIR / "processed"
 REVIEW_QUEUE_DIR = BASE_DIR / "review_queue"
@@ -196,13 +196,25 @@ class CharityDataProcessor:
         try:
             extract_dir.mkdir(exist_ok=True)
             
-            for zip_file in zip_dir.glob("charity_*.zip"):
+            # Look for any ZIP file in the directory
+            zip_files = list(zip_dir.glob("*.zip"))
+            if not zip_files:
+                logger.error(f"❌ No ZIP files found in: {zip_dir}")
+                return False
+            
+            for zip_file in zip_files:
                 logger.info(f"  Extracting {zip_file.name}")
                 
                 with zipfile.ZipFile(zip_file, 'r') as zip_ref:
                     zip_ref.extractall(extract_dir)
                     
                 logger.info(f"  ✅ Extracted {zip_file.name}")
+                
+                # List extracted files for debugging
+                extracted_files = list(extract_dir.rglob("*"))
+                logger.info(f"  📁 Extracted files: {len(extracted_files)}")
+                for f in extracted_files[:5]:  # Show first 5
+                    logger.info(f"    - {f}")
             
             return True
             
@@ -215,36 +227,42 @@ class CharityDataProcessor:
         logger.info("🔍 Processing charity data...")
         
         try:
-            # Load charity data
-            charity_file = data_dir / "charity.json"
+            # Load charity data - look for any JSON file in the directory
+            json_files = list(data_dir.glob("*.json"))
+            if not json_files:
+                logger.error(f"❌ No JSON files found in: {data_dir}")
+                return []
+            
+            charity_file = json_files[0]  # Use the first JSON file found
+            logger.info(f"📄 Using charity data file: {charity_file}")
+            
             if not charity_file.exists():
                 logger.error(f"❌ Charity file not found: {charity_file}")
                 return []
             
-            charities = []
-            with open(charity_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    if line.strip():
-                        charities.append(json.loads(line))
+            # Load charity data as JSON array
+            with open(charity_file, 'r', encoding='utf-8-sig') as f:
+                charities = json.load(f)
             
             logger.info(f"📊 Loaded {len(charities)} charities")
             
-            # Load classification data
-            classification_file = data_dir / "charity_classification.json"
-            if not classification_file.exists():
-                logger.error(f"❌ Classification file not found: {classification_file}")
-                return []
-            
+            # Load classification data (if available)
+            classification_file = data_dir / "publicextract.charity_classification.json"
             classifications = {}
-            with open(classification_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    if line.strip():
-                        data = json.loads(line)
-                        regno = data.get('regno')
-                        if regno:
-                            classifications[regno] = data
             
-            logger.info(f"📊 Loaded {len(classifications)} classifications")
+            if classification_file.exists():
+                with open(classification_file, 'r', encoding='utf-8-sig') as f:
+                    classification_data = json.load(f)
+                
+                # Process classification data
+                for item in classification_data:
+                    regno = item.get('registered_charity_number')
+                    if regno:
+                        classifications[regno] = item
+                
+                logger.info(f"📊 Loaded {len(classifications)} classifications")
+            else:
+                logger.warning("⚠️ Classification file not found - proceeding with charity data only")
             
             # Filter for new grantmaking trusts
             filtered_trusts = self.filter_grantmaking_trusts(charities, classifications)
@@ -264,8 +282,8 @@ class CharityDataProcessor:
         filtered_trusts = []
         
         for charity in charities:
-            regno = charity.get('regno')
-            reg_status = charity.get('reg_status')
+            regno = charity.get('registered_charity_number')
+            reg_status = charity.get('charity_registration_status')
             reg_date = charity.get('date_of_registration')
             
             # Filter for active charities
@@ -277,7 +295,12 @@ class CharityDataProcessor:
                 continue
                 
             try:
-                charity_reg_date = datetime.strptime(reg_date, '%Y-%m-%d').date()
+                # Handle both formats: '2025-11-15' and '2025-11-15T00:00:00'
+                if 'T' in reg_date:
+                    charity_reg_date = datetime.strptime(reg_date, '%Y-%m-%dT%H:%M:%S').date()
+                else:
+                    charity_reg_date = datetime.strptime(reg_date, '%Y-%m-%d').date()
+                    
                 if not (self.last_month_start.date() <= charity_reg_date <= self.last_month_end.date()):
                     continue
             except ValueError:
@@ -290,7 +313,7 @@ class CharityDataProcessor:
                 # Add to filtered results
                 trust_data = {
                     'regno': regno,
-                    'name': charity.get('name', ''),
+                    'name': charity.get('charity_name', ''),
                     'reg_status': reg_status,
                     'reg_date': reg_date,
                     'classification': classification,
@@ -302,20 +325,14 @@ class CharityDataProcessor:
     
     def is_grantmaking_classification(self, classification: Dict) -> bool:
         """Check if classification indicates grantmaking."""
-        # This would use the actual codes from Data Definition document
-        # For now, using placeholder logic
+        # Use exact classification codes from Charity Commission
+        classification_code = classification.get('classification_code')
+        classification_type = classification.get('classification_type')
         
-        operational_method = classification.get('operational_method', '').lower()
-        beneficiary_type = classification.get('beneficiary_type', '').lower()
+        # Grantmaking classifications (codes 301 and 302)
+        grantmaking_codes = [301, 302]
         
-        # Check for grantmaking operational methods
-        grantmaking_methods = ['makes_grants_to_organisations', 'main_way_grant_making']
-        if operational_method in grantmaking_methods:
-            return True
-        
-        # Check for beneficiary types that indicate grantmaking
-        grantmaking_beneficiaries = ['other_charities_or_voluntary_bodies']
-        if beneficiary_type in grantmaking_beneficiaries:
+        if classification_code in grantmaking_codes:
             return True
         
         return False
