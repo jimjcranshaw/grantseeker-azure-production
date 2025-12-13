@@ -657,7 +657,7 @@ def store_pages_and_embeddings(session_id: int, funder_id: int, pages: List[Dict
         release_db_connection(conn)
 
 def store_funding_opportunities(funder_id: int, session_id: int, analysis_result: Dict):
-    """Store identified funding opportunities in the database."""
+    """Store identified funding opportunities in the database with guaranteed coverage."""
     if not is_db_available():
         logger.info(f"  📝 Skipping opportunity storage (no DB mode)")
         opportunities = analysis_result.get('opportunities', [])
@@ -672,6 +672,9 @@ def store_funding_opportunities(funder_id: int, session_id: int, analysis_result
         opportunities = analysis_result.get('opportunities', [])
         
         stored_count = 0
+        ai_opportunities = 0
+        
+        # Store AI-generated opportunities first
         for opp in opportunities:
             cursor.execute("""
                 INSERT INTO funding_opportunities (
@@ -713,11 +716,74 @@ def store_funding_opportunities(funder_id: int, session_id: int, analysis_result
                 opp.get('guidance_text', '')
             ))
             stored_count += 1
+            ai_opportunities += 1
+        
+        # Check if any opportunities were stored for this funder in this session
+        cursor.execute(
+            "SELECT COUNT(*) FROM funding_opportunities WHERE funder_id = %s AND scrape_session_id = %s",
+            (funder_id, session_id)
+        )
+        count_result = cursor.fetchone()
+        total_stored = count_result[0] if count_result else 0
+        
+        # GUARANTEED COVERAGE: If no opportunities found, create a DEFAULT_TEMPLATE
+        if total_stored == 0:
+            logger.info(f"  ⚠️ No opportunities found for funder {funder_id}. Creating DEFAULT_TEMPLATE opportunity...")
+            
+            # Get funder details for the default template
+            cursor.execute(
+                "SELECT name, website FROM funders WHERE id = %s",
+                (funder_id,)
+            )
+            funder_result = cursor.fetchone()
+            funder_name = funder_result[0] if funder_result else "Unknown Foundation"
+            funder_website = funder_result[1] if funder_result else ""
+            
+            cursor.execute("""
+                INSERT INTO funding_opportunities (
+                    funder_id, scrape_session_id,
+                    opportunity_title, description,
+                    eligibility_inclusion, eligibility_exclusion,
+                    application_requirements, application_process,
+                    application_questions, objectives_goals,
+                    funding_focus, funding_amounts,
+                    deadlines, evaluation_criteria,
+                    contact_info, important_urls,
+                    application_form_url, application_form_type,
+                    application_questions_list, guidance_url, guidance_text,
+                    created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                RETURNING id
+            """, (
+                funder_id, session_id,
+                f"Funding Opportunities - {funder_name}",
+                f"This foundation offers funding opportunities. Please visit their website for current programs and application details.",
+                "Please check the foundation's website for specific eligibility criteria.",
+                "Please check the foundation's website for exclusion criteria.",
+                "Visit the foundation's website for current application requirements.",
+                "Visit the foundation's website for information about their application process.",
+                "Please contact the foundation directly for specific application questions.",
+                "The foundation supports various charitable causes and initiatives.",
+                "General charitable funding - please see website for specific focus areas.",
+                "Funding amounts vary - please check the foundation's website for current information.",
+                "Deadlines vary by program - please check the foundation's website for current deadlines.",
+                "Please check the foundation's website for evaluation criteria.",
+                f"Visit {funder_website} for contact information and application details." if funder_website else "Please visit the foundation's website for contact information.",
+                json.dumps([funder_website] if funder_website else []),
+                funder_website,
+                "Website",
+                "Please see the foundation's website for application forms and questions.",
+                funder_website,
+                "Default template - please visit the foundation's website for detailed guidance."
+            ))
+            stored_count += 1
+            logger.info(f"  ✓ Created DEFAULT_TEMPLATE opportunity for guaranteed coverage")
         
         conn.commit()
         cursor.close()
         
-        logger.info(f"  ✓ Stored {stored_count} funding opportunities")
+        logger.info(f"  ✓ Stored {stored_count} funding opportunities ({ai_opportunities} AI-generated, {stored_count - ai_opportunities} DEFAULT_TEMPLATE)")
         
     finally:
         release_db_connection(conn)
