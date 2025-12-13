@@ -13,6 +13,9 @@ langchain-community>=0.0.10
 # Database
 psycopg2-binary>=2.9.9
 
+# File Monitoring & Processing
+watchdog>=3.0.0
+
 # Utilities
 requests>=2.31.0
 python-dotenv>=1.0.0
