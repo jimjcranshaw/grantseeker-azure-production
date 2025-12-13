@@ -961,6 +961,94 @@ def load_test_foundations() -> List[tuple[str, str]]:
     return foundations[:TEST_FOUNDATIONS_COUNT]
 
 
+def load_new_trusts_from_queue() -> List[tuple[str, str]]:
+    """Load new trusts from the monthly charity processor queue files."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    processed_dir = os.path.join(script_dir, 'data', 'processed')
+    
+    if not os.path.exists(processed_dir):
+        logger.warning(f"Processed data directory not found: {processed_dir}")
+        return []
+    
+    # Find the most recent queue file
+    queue_files = [f for f in os.listdir(processed_dir) if f.startswith('trusts_to_crawl_') and f.endswith('.json')]
+    
+    if not queue_files:
+        logger.warning("No trust queue files found in processed directory")
+        return []
+    
+    # Sort by filename to get the most recent
+    latest_queue_file = sorted(queue_files)[-1]
+    queue_path = os.path.join(processed_dir, latest_queue_file)
+    
+    logger.info(f"Loading trusts from queue file: {queue_path}")
+    
+    try:
+        with open(queue_path, 'r', encoding='utf-8-sig') as f:
+            trusts = json.load(f)
+        
+        # Convert to the format expected by the main pipeline (name, website)
+        # For now, we'll just use the trust name as placeholder since we don't have websites yet
+        # This will trigger the crawler to search for the website
+        foundation_list = []
+        for trust in trusts:
+            name = trust.get('name', '')
+            if name:
+                # Use empty website - crawler will search for it
+                foundation_list.append((name, ''))
+        
+        logger.info(f"Loaded {len(foundation_list)} trusts from queue")
+        return foundation_list
+        
+    except Exception as e:
+        logger.error(f"Failed to load queue file {queue_path}: {e}")
+        return []
+
+
+def load_new_trusts_from_queue() -> List[tuple[str, str]]:
+    """Load new trusts from the monthly charity processor queue files."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    processed_dir = os.path.join(script_dir, 'data', 'processed')
+    
+    if not os.path.exists(processed_dir):
+        logger.warning(f"Processed data directory not found: {processed_dir}")
+        return []
+    
+    # Find the most recent queue file
+    queue_files = [f for f in os.listdir(processed_dir) if f.startswith('trusts_to_crawl_') and f.endswith('.json')]
+    
+    if not queue_files:
+        logger.warning("No trust queue files found in processed directory")
+        return []
+    
+    # Sort by filename to get the most recent
+    latest_queue_file = sorted(queue_files)[-1]
+    queue_path = os.path.join(processed_dir, latest_queue_file)
+    
+    logger.info(f"Loading trusts from queue file: {queue_path}")
+    
+    try:
+        with open(queue_path, 'r', encoding='utf-8-sig') as f:
+            trusts = json.load(f)
+        
+        # Convert to the format expected by the main pipeline (name, website)
+        # For now, we'll just use the trust name as placeholder since we don't have websites yet
+        # This will trigger the crawler to search for the website
+        foundation_list = []
+        for trust in trusts:
+            name = trust.get('name', '')
+            if name:
+                # Use empty website - crawler will search for it
+                foundation_list.append((name, ''))
+        
+        logger.info(f"Loaded {len(foundation_list)} trusts from queue")
+        return foundation_list
+        
+    except Exception as e:
+        logger.error(f"Failed to load queue file {queue_path}: {e}")
+        return []
+
+
 async def main(no_db_mode: bool = False):
     """Main pipeline execution."""
     global NO_DB_MODE
