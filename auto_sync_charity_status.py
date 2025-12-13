@@ -5,6 +5,7 @@ import pandas as pd
 import psycopg2
 import os
 import sys
+import json
 from dotenv import load_dotenv
 from fuzzywuzzy import process
 
@@ -95,96 +96,116 @@ def download_register():
 # Easiest way without API keys is downloading the file.
 # I will implement a script that accepts the file path OR tries to download.
 
-def sync_db(dataframe):
+def sync_db(data):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # 1. Load active charities from DF into memory set
-    print("   ⏳ Processing register data...")
-    # Assuming DF has 'regno' and 'name' columns (or similar)
-    # The public extract usually has 'regno'
+    # Handle both JSON and DataFrame inputs
+    if isinstance(data, str):
+        # Assume it's a file path
+        if data.endswith('.json'):
+            with open(data, 'r', encoding='utf-8-sig') as f:
+                charities = json.load(f)
+        else:
+            # Assume CSV
+            data = pd.read_csv(data, encoding='latin1', on_bad_lines='skip')
+            charities = data.to_dict('records')
+    else:
+        # Assume it's already a list of records
+        charities = data
     
-    # Normalize columns
-    dataframe.columns = [c.lower().strip() for c in dataframe.columns]
+    print(f"   ⏳ Processing {len(charities):,} charity records...")
     
-    # Identify key columns
-    reg_col = next((c for c in dataframe.columns if 'reg' in c and 'no' in c), None)
-    name_col = next((c for c in dataframe.columns if 'name' in c), None)
-    status_col = next((c for c in dataframe.columns if 'status' in c or 'orgtype' in c), None) # Optional
+    # Filter for active (registered) charities only
+    active_charities = {}
+    for charity in charities:
+        status = charity.get('charity_registration_status', '').lower()
+        if status == 'registered':
+            reg_no = str(charity.get('registered_charity_number', '')).strip()
+            name = charity.get('charity_name', '').strip()
+            if reg_no and name:
+                active_charities[reg_no] = name
     
-    if not reg_col or not name_col:
-        print(f"❌ Could not find reg/name columns. Found: {dataframe.columns}")
-        return
-
-    # Create lookup dicts
-    # active_charities = {regno: name}
-    print("   Building lookup table...")
-    active_registry = set(dataframe[reg_col].astype(str).str.strip())
+    print(f"   ✅ Found {len(active_charities):,} active registered charities")
     
     # Create Name -> RegNo map for lookup
-    name_to_reg = dict(zip(dataframe[name_col].astype(str).str.lower().str.strip(), dataframe[reg_col].astype(str).str.strip()))
+    name_to_reg = {name.lower(): reg_no for reg_no, name in active_charities.items()}
     
     # 2. Iterate DB
-    print("   🔍 Checking database...")
+    print("   🔍 Checking database for closed trusts...")
     cursor.execute("SELECT id, name, charity_number FROM funders WHERE is_active = TRUE")
     db_funders = cursor.fetchall()
     
-    updated_count = 0
+    linked_count = 0
     deactivated_count = 0
     
     for f_id, f_name, f_num in db_funders:
         f_name_clean = f_name.lower().strip()
         
-        # Step A: Link Missing Numbers
+        # Step A: Link Missing Numbers (for trusts without charity numbers)
         if not f_num:
             # Try exact match
             if f_name_clean in name_to_reg:
                 new_num = name_to_reg[f_name_clean]
                 print(f"   🔗 Linked '{f_name}' to Charity #{new_num}")
                 cursor.execute("UPDATE funders SET charity_number = %s WHERE id = %s", (new_num, f_id))
-                f_num = new_num # Set for next step
-                updated_count += 1
-            else:
-                # Fuzzy match? (Optional, maybe too slow for loop)
-                pass
+                f_num = new_num  # Set for next step
+                linked_count += 1
         
         # Step B: Check Status (if we have a number)
         if f_num:
             f_num_str = str(f_num).strip()
-            if f_num_str not in active_registry:
-                print(f"   ❌ Deactivating '{f_name}' (#{f_num}) - Not in Register")
-                cursor.execute("UPDATE funders SET is_active = FALSE WHERE id = %s", (f_id,))
-                deactivated_count += 1
+            if f_num_str not in active_charities:
+                # Check if this charity is in the register but marked as 'Removed'
+                # Let's find this charity in our data to see its status
+                charity_status = 'not_found'
+                for charity in charities:
+                    if str(charity.get('registered_charity_number', '')).strip() == f_num_str:
+                        charity_status = charity.get('charity_registration_status', 'unknown')
+                        break
+                
+                if charity_status == 'Removed':
+                    print(f"   🔻 Deactivating '{f_name}' (#{f_num}) - Charity Removed from Register")
+                    cursor.execute("UPDATE funders SET is_active = FALSE WHERE id = %s", (f_id,))
+                    deactivated_count += 1
+                elif charity_status == 'not_found':
+                    print(f"   🔻 Deactivating '{f_name}' (#{f_num}) - Charity Not Found in Register")
+                    cursor.execute("UPDATE funders SET is_active = FALSE WHERE id = %s", (f_id,))
+                    deactivated_count += 1
     
     conn.commit()
     print("-" * 50)
-    print(f"✅ Sync Complete")
-    print(f"   🔗 Linked IDs: {updated_count}")
-    print(f"   🔻 Deactivated: {deactivated_count}")
+    print(f"✅ Charity Status Sync Complete")
+    print(f"   🔗 Linked charity numbers: {linked_count}")
+    print(f"   🔻 Deactivated closed trusts: {deactivated_count}")
     conn.close()
 
 if __name__ == "__main__":
-    print("⚠ NOTE: Fully automated download is complex due to file format changes.")
-    print("Please download the 'Charity classification' CSV from:")
-    print("https://register-of-charities.charitycommission.gov.uk/register/full-register-download")
-    print("Then run: python3 auto_sync_charity_status.py --file <path_to_csv>")
+    print("🔍 Charity Status Sync - Check for closed trusts")
+    print("This script checks our database against the latest Charity Commission register")
+    print("and deactivates trusts that have been removed from the register.")
+    print()
     
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--file', help='Path to Charity Commission CSV')
+    parser.add_argument('--file', help='Path to Charity Commission JSON or CSV file')
     args = parser.parse_args()
     
     if args.file:
         try:
             print(f"📥 Loading {args.file}...")
-            df = pd.read_csv(args.file, encoding='latin1', on_bad_lines='skip')
-            sync_db(df)
+            if args.file.endswith('.json'):
+                # Handle JSON files from monthly processor
+                sync_db(args.file)
+            else:
+                # Handle CSV files
+                df = pd.read_csv(args.file, encoding='latin1', on_bad_lines='skip')
+                sync_db(df)
         except Exception as e:
             print(f"❌ Error loading file: {e}")
     else:
-        print("🌍 No file provided. Attempting automatic download from Charity Commission...")
-        df = download_register()
-        if df is not None:
-            sync_db(df)
-        else:
-            print("❌ Automatic download failed. Please download manually and use --file.")
+        print("❌ No file provided.")
+        print("Usage: python3 auto_sync_charity_status.py --file <path_to_charity_register.json>")
+        print()
+        print("Tip: Use the JSON file from monthly_charity_processor.py:")
+        print("   python3 auto_sync_charity_status.py --file data/processed/publicextract.charity/publicextract.charity.json")
