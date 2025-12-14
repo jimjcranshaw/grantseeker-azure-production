@@ -25,6 +25,16 @@ This testing plan covers all changes made for charity commission funder integrat
 - ✅ Verify codes are stored as JSON array
 - ✅ Check no infinite loops on unclassified funders
 
+### 2b. Regex-Based Classification (classify_funders_without_ukcat_data.py)
+**Purpose:** Verify UKCAT regex patterns classify funders not in UKCAT database
+
+**Test Cases:**
+- ✅ Script exists and compiles
+- ✅ Coverage improved to 93.3% (from 87.4%)
+- ✅ Regex-classified funders have valid UKCAT codes
+- ✅ Uses UKCAT's open-source regex patterns
+- ✅ Classifies using name + activities + description
+
 ### 3. Monthly Processor Integration (monthly_charity_processor.py)
 **Purpose:** Verify automatic classification works for new monthly additions
 

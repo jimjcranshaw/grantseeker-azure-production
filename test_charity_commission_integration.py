@@ -372,6 +372,75 @@ class TestSuite:
         
         return True  # Informational test
     
+    # ============================================================================
+    # TEST 7: Regex-Based Classification Tests
+    # ============================================================================
+    
+    def test_regex_classification_script_exists(self):
+        """Test that regex classification script exists and is valid."""
+        script_path = 'classify_funders_without_ukcat_data.py'
+        if not os.path.exists(script_path):
+            return False
+        
+        import py_compile
+        try:
+            py_compile.compile(script_path, doraise=True)
+            logger.info(f"  Script compiles successfully")
+            return True
+        except py_compile.PyCompileError as e:
+            logger.error(f"  Compilation error: {e}")
+            return False
+    
+    def test_regex_classification_coverage_improvement(self):
+        """Test that regex classification improved coverage."""
+        # Check current coverage
+        self.cursor.execute('SELECT COUNT(*) FROM funders')
+        total = self.cursor.fetchone()[0]
+        
+        self.cursor.execute("""
+            SELECT COUNT(*) FROM funders 
+            WHERE ukcat_codes IS NOT NULL 
+            AND jsonb_array_length(ukcat_codes) > 0
+        """)
+        classified = self.cursor.fetchone()[0]
+        
+        coverage = (classified / total * 100) if total > 0 else 0
+        
+        logger.info(f"  Current coverage: {classified}/{total} ({coverage:.1f}%)")
+        
+        # Should be at least 90% after regex classification
+        return coverage >= 90
+    
+    def test_regex_classified_funders_have_valid_codes(self):
+        """Test that regex-classified funders have valid UKCAT codes."""
+        # Get funders classified in last 10 minutes (should include regex-classified ones)
+        self.cursor.execute("""
+            SELECT ukcat_codes 
+            FROM funders 
+            WHERE ukcat_codes IS NOT NULL 
+            AND jsonb_array_length(ukcat_codes) > 0
+            AND updated_at > NOW() - INTERVAL '10 minutes'
+            LIMIT 100
+        """)
+        
+        invalid_count = 0
+        for row in self.cursor.fetchall():
+            codes = row[0]
+            try:
+                if isinstance(codes, str):
+                    codes = json.loads(codes)
+                
+                # Check if codes are valid UKCAT format (2-5 chars, alphanumeric)
+                for code in codes:
+                    if not (isinstance(code, str) and 2 <= len(code) <= 5 and code.replace('0', '').replace('1', '').replace('2', '').replace('3', '').replace('4', '').replace('5', '').replace('6', '').replace('7', '').replace('8', '').replace('9', '').isalpha() or code.isdigit()):
+                        invalid_count += 1
+                        break
+            except:
+                invalid_count += 1
+        
+        logger.info(f"  Invalid codes found: {invalid_count}/100 sampled")
+        return invalid_count == 0
+    
     def run_all_tests(self):
         """Run all tests."""
         logger.info("=" * 60)
@@ -409,6 +478,12 @@ class TestSuite:
         # Test 6: Integration
         logger.info("\n🔗 TEST GROUP 6: Integration Tests")
         self.run_test("End-to-end workflow", self.test_end_to_end_workflow)
+        
+        # Test 7: Regex-Based Classification
+        logger.info("\n🔤 TEST GROUP 7: Regex-Based Classification")
+        self.run_test("Regex classification script exists", self.test_regex_classification_script_exists)
+        self.run_test("Regex classification coverage improvement", self.test_regex_classification_coverage_improvement)
+        self.run_test("Regex classified funders have valid codes", self.test_regex_classified_funders_have_valid_codes)
         
         # Print summary
         logger.info("\n" + "=" * 60)
