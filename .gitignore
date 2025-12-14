@@ -43,3 +43,4 @@ test_results/
 # Large data files
 data/archive/*.zip
 data/processed/publicextract.charity/*.json
+data/processed/test_extract/*.json
