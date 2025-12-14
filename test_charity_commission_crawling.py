@@ -22,8 +22,7 @@ from azure_production_pipeline import (
     get_db_connection,
     release_db_connection,
     process_foundation,
-    load_funders_without_websites,
-    build_charity_commission_url
+    load_funders_with_charity_commission_urls
 )
 
 # Load environment variables
@@ -51,12 +50,12 @@ async def test_charity_commission_crawling(test_count: int = 5):
     # Initialize database
     init_db_pool()
     
-    # Load test funders (without websites, with charity numbers)
-    funders = load_funders_without_websites(limit=test_count)
+    # Load test funders (with Charity Commission URLs)
+    funders = load_funders_with_charity_commission_urls(limit=test_count)
     
     if not funders:
-        print("❌ No funders found without websites (with charity numbers)")
-        print("   Make sure you have funders in the database with charity_number but no website")
+        print("❌ No funders found with Charity Commission URLs")
+        print("   Run populate_charity_commission_urls.py first to populate URLs")
         return
     
     print(f"Found {len(funders)} funders to test")
@@ -74,12 +73,11 @@ async def test_charity_commission_crawling(test_count: int = 5):
     
     # Process test funders
     tasks = []
-    for funder_id, name, charity_number in funders:
-        charity_url = build_charity_commission_url(charity_number)
-        print(f"  📋 {name} (Charity #{charity_number})")
-        print(f"     URL: {charity_url}")
+    for funder_id, name, website_url in funders:
+        print(f"  📋 {name}")
+        print(f"     URL: {website_url}")
         tasks.append(
-            process_foundation(name, '', semaphore, stats, funder_id=funder_id, charity_number=charity_number)
+            process_foundation(name, website_url, semaphore, stats, funder_id=funder_id)
         )
     
     print()
@@ -102,7 +100,7 @@ async def test_charity_commission_crawling(test_count: int = 5):
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        for funder_id, name, charity_number in funders:
+        for funder_id, name, website_url in funders:
             cursor.execute("""
                 SELECT COUNT(*) 
                 FROM funding_opportunities 
