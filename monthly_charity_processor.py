@@ -426,7 +426,52 @@ class ReviewProcessor:
     """Process reviewed charity data."""
     
     def __init__(self):
-        pass
+        self.ukcat_mappings = self._load_ukcat_mappings()
+    
+    def _load_ukcat_mappings(self) -> Dict[str, List[str]]:
+        """Load UKCAT charity number to code mappings from CSV files."""
+        ukcat_files = [
+            'ukcat_project/data/charities_active-ukcat.csv',
+            'ukcat_project/data/charities_inactive-ukcat.csv'
+        ]
+        
+        mappings = {}
+        
+        for file_path in ukcat_files:
+            if os.path.exists(file_path):
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
+                            org_id = row['org_id']
+                            ukcat_code = row['ukcat_code']
+                            
+                            # Convert "GB-CHC-1000001" to "1000001"
+                            if org_id.startswith('GB-CHC-'):
+                                charity_number = org_id.replace('GB-CHC-', '')
+                                
+                                if charity_number not in mappings:
+                                    mappings[charity_number] = []
+                                
+                                if ukcat_code not in mappings[charity_number]:
+                                    mappings[charity_number].append(ukcat_code)
+                except Exception as e:
+                    logger.warning(f"⚠️ Error loading UKCAT file {file_path}: {e}")
+        
+        logger.info(f"📊 Loaded UKCAT mappings for {len(mappings)} charities")
+        return mappings
+    
+    def _classify_funder_by_charity_number(self, charity_number: str, cursor) -> Optional[List[str]]:
+        """Classify a funder using charity number matching."""
+        if not charity_number:
+            return None
+        
+        charity_str = str(charity_number).strip()
+        
+        if charity_str in self.ukcat_mappings:
+            return self.ukcat_mappings[charity_str]
+        
+        return None
     
     def process_reviewed_file(self, review_file: Path) -> bool:
         """Process a reviewed CSV file."""
@@ -478,39 +523,68 @@ class ReviewProcessor:
                 
                 existing = cursor.fetchone()
                 
+                # Get UKCAT codes for this charity number
+                ukcat_codes = self._classify_funder_by_charity_number(entry['regno'], cursor)
+                
                 if existing:
                     # Update existing record
-                    cursor.execute("""
+                    update_query = """
                         UPDATE funders SET 
                             name = %s,
                             manual_review_classification = %s,
                             review_notes = %s,
                             updated_at = CURRENT_TIMESTAMP
-                        WHERE charity_number = %s
-                    """, (
+                    """
+                    update_params = [
                         entry['name'],
                         entry['manual_classification'],
-                        entry['review_notes'],
-                        entry['regno']
-                    ))
+                        entry['review_notes']
+                    ]
+                    
+                    # Add UKCAT codes if available
+                    if ukcat_codes:
+                        update_query += ", ukcat_codes = %s"
+                        update_params.append(json.dumps(ukcat_codes))
+                    
+                    update_query += " WHERE charity_number = %s"
+                    update_params.append(entry['regno'])
+                    
+                    cursor.execute(update_query, tuple(update_params))
+                    
+                    if ukcat_codes:
+                        logger.debug(f"✅ Updated UKCAT codes for {entry['name']} ({entry['regno']}): {ukcat_codes}")
                 else:
                     # Insert new record (only if website provided)
                     if entry.get('website_url'):
-                        cursor.execute("""
+                        insert_query = """
                             INSERT INTO funders (
                                 name, website, charity_number, 
                                 initial_classification, manual_review_classification,
                                 review_notes, is_active, created_at, updated_at
-                            ) VALUES (%s, %s, %s, %s, %s, %s, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                        """, (
+                        """
+                        insert_params = [
                             entry['name'],
                             entry['website_url'],
                             entry['regno'],
                             entry['initial_classification'],
                             entry['manual_classification'],
                             entry['review_notes']
-                        ))
+                        ]
+                        
+                        # Add UKCAT codes if available
+                        if ukcat_codes:
+                            insert_query += ", ukcat_codes"
+                            insert_params.append(json.dumps(ukcat_codes))
+                        
+                        insert_query += ") VALUES (" + ",".join(["%s"] * len(insert_params)) + ", TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                        
+                        cursor.execute(insert_query, tuple(insert_params))
                         imported_count += 1
+                        
+                        if ukcat_codes:
+                            logger.info(f"✅ Inserted {entry['name']} ({entry['regno']}) with UKCAT codes: {ukcat_codes}")
+                        else:
+                            logger.debug(f"⚠️ Inserted {entry['name']} ({entry['regno']}) but no UKCAT data available")
             
             conn.commit()
             logger.info(f"✅ Database import complete: {imported_count} records")
