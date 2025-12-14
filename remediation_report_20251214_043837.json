@@ -1,0 +1,22 @@
+{
+  "timestamp": "2025-12-14T04:38:37.051042",
+  "dry_run": false,
+  "total_missing_funders": 2376,
+  "processed_funders": 2376,
+  "success_rate": 99.95791245791246,
+  "status_breakdown": {
+    "success": 2375,
+    "analysis_failed": 1
+  },
+  "total_opportunities_created": 2458,
+  "average_opportunities_per_funder": 1.0345117845117846,
+  "failed_funders": [
+    {
+      "id": 9157,
+      "name": "THE SYNCONA FOUNDATION",
+      "status": "analysis_failed",
+      "error": "AI analysis failed: Error code: 400 - {'error': {'message': \"This model's maximum context length is 131072 tokens. However, you requested 173997 tokens (165997 in the messages, 8000 in the completion). Please reduce the length of the messages or completion.\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+    }
+  ],
+  "coverage_achieved": 99.95791245791246
+}

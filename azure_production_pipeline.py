@@ -344,9 +344,16 @@ async def crawl_foundation(url: str, name: str) -> List[Dict]:
                 # Normalize
                 normalized_url = urljoin(discovered_url, urlparse(discovered_url).path)
                 
-                # Check for documents (PDF/DOCX)
-                if re.search(r"\.(pdf|doc|docx)$", normalized_url.lower()):
-                    if is_relevant_path(urlparse(normalized_url).path):
+                # Check for documents (PDF/DOCX) - including Charity Commission document links
+                is_document = (
+                    re.search(r"\.(pdf|doc|docx)$", normalized_url.lower()) or
+                    'annual-accounts' in normalized_url.lower() or
+                    'articles-of-association' in normalized_url.lower() or
+                    'governing-document' in normalized_url.lower() or
+                    'download' in normalized_url.lower() and ('pdf' in normalized_url.lower() or 'doc' in normalized_url.lower())
+                )
+                if is_document:
+                    if is_relevant_path(urlparse(normalized_url).path) or 'charitycommission.gov.uk' in normalized_url:
                         documents_to_process.append(normalized_url)
                     continue
 
@@ -530,6 +537,27 @@ async def analyze_foundation_content(pages: List[Dict], foundation_name: str) ->
 # =============================================================================
 # DATABASE OPERATIONS
 # =============================================================================
+
+def get_funder_charity_number(funder_id: int) -> Optional[str]:
+    """Get charity number for a funder."""
+    if not is_db_available():
+        return None
+        
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT charity_number FROM funders WHERE id = %s
+        """, (funder_id,))
+        result = cursor.fetchone()
+        cursor.close()
+        return result[0] if result and result[0] else None
+    finally:
+        release_db_connection(conn)
+
+def build_charity_commission_url(charity_number: str) -> str:
+    """Build Charity Commission profile page URL from charity number."""
+    return f"https://register-of-charities.charitycommission.gov.uk/charity-details/?regId={charity_number}&subId=0"
 
 def store_foundation(name: str, url: str) -> int:
     """Store or update foundation in database."""
@@ -852,15 +880,17 @@ def get_foundation_change_headers(funder_id: int) -> Tuple[Optional[str], Option
 # MAIN PROCESSING PIPELINE
 # =============================================================================
 
-async def process_foundation(name: str, url: str, semaphore: asyncio.Semaphore, stats: Dict):
+async def process_foundation(name: str, url: str, semaphore: asyncio.Semaphore, stats: Dict, funder_id: Optional[int] = None, charity_number: Optional[str] = None):
     """
     Process a single foundation with change detection.
     
     Args:
         name: Foundation name
-        url: Foundation website URL
+        url: Foundation website URL (or None if using Charity Commission page)
         semaphore: Concurrency control semaphore
         stats: Statistics dictionary
+        funder_id: Optional funder ID (if already known)
+        charity_number: Optional charity number (for Charity Commission pages)
     """
     async with semaphore:
         try:
@@ -868,14 +898,39 @@ async def process_foundation(name: str, url: str, semaphore: asyncio.Semaphore, 
             logger.info(f"Processing: {name}")
             logger.info(f"{'='*70}")
             
-            # Store/get foundation
-            funder_id = store_foundation(name, url)
-            logger.info(f"  ✓ Foundation ID: {funder_id}")
+            # Determine the URL to use
+            crawl_url = url
+            is_charity_commission = False
+            
+            # If no website URL provided, check if we have a charity number for Charity Commission page
+            if not url or url.strip() == '':
+                if not funder_id:
+                    # Store/get foundation first
+                    funder_id = store_foundation(name, url or '')
+                    logger.info(f"  ✓ Foundation ID: {funder_id}")
+                
+                # Get charity number from database if not provided
+                if not charity_number:
+                    charity_number = get_funder_charity_number(funder_id)
+                
+                if charity_number:
+                    crawl_url = build_charity_commission_url(charity_number)
+                    is_charity_commission = True
+                    logger.info(f"  📋 No website found, using Charity Commission page: {crawl_url}")
+                else:
+                    logger.warning(f"  ⚠️ No website or charity number found for {name} - skipping")
+                    stats['failed'] += 1
+                    return
+            else:
+                # Store/get foundation
+                if not funder_id:
+                    funder_id = store_foundation(name, url)
+                logger.info(f"  ✓ Foundation ID: {funder_id}")
             
             # Check for changes using HTTP HEAD
             if CHANGE_DETECTION_ENABLED:
                 stored_etag, stored_last_modified, stored_content_hash = get_foundation_change_headers(funder_id)
-                changed, new_etag, new_last_modified, new_content_hash = check_url_changed(url, stored_etag, stored_last_modified, stored_content_hash)
+                changed, new_etag, new_last_modified, new_content_hash = check_url_changed(crawl_url, stored_etag, stored_last_modified, stored_content_hash)
                 
                 # Update headers
                 update_change_detection_headers(funder_id, new_etag, new_last_modified, new_content_hash)
@@ -889,10 +944,11 @@ async def process_foundation(name: str, url: str, semaphore: asyncio.Semaphore, 
             session_id = create_scrape_session(funder_id)
             logger.info(f"  ✓ Scrape session ID: {session_id}")
             
-            # Crawl foundation website
-            logger.info(f"  🔍 Crawling: {url}")
+            # Crawl foundation website or Charity Commission page
+            source_type = "Charity Commission page" if is_charity_commission else "website"
+            logger.info(f"  🔍 Crawling {source_type}: {crawl_url}")
             start_time = time.time()
-            pages = await crawl_foundation(url, name)
+            pages = await crawl_foundation(crawl_url, name)
             elapsed_time = time.time() - start_time
             logger.info(f"  ⏱️ Crawling completed in {elapsed_time:.2f} seconds")
             
@@ -951,6 +1007,38 @@ def load_foundations_from_csv(csv_path: str) -> List[tuple[str, str]]:
         raise ValueError(f"No valid foundations found in {csv_path}")
 
     return foundations
+
+def load_funders_without_websites(limit: Optional[int] = None) -> List[tuple[int, str, str]]:
+    """
+    Load funders from database that have no website but have a charity number.
+    Returns list of (funder_id, name, charity_number) tuples.
+    """
+    if not is_db_available():
+        logger.warning("Database not available - cannot load funders without websites")
+        return []
+    
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        query = """
+            SELECT id, name, charity_number 
+            FROM funders 
+            WHERE (website IS NULL OR website = '')
+            AND charity_number IS NOT NULL 
+            AND charity_number != ''
+        """
+        if limit:
+            query += f" LIMIT {limit}"
+        
+        cursor.execute(query)
+        results = cursor.fetchall()
+        cursor.close()
+        
+        funders = [(row[0], row[1], row[2]) for row in results]
+        logger.info(f"Loaded {len(funders)} funders without websites (with charity numbers)")
+        return funders
+    finally:
+        release_db_connection(conn)
 
 
 def load_test_foundations() -> List[tuple[str, str]]:
@@ -1078,6 +1166,7 @@ async def main(no_db_mode: bool = False):
         logger.info("Running in NO DATABASE MODE - skipping DB initialization")
     
     # Load foundation URLs
+    foundations = []
     if TEST_MODE:
         foundations = load_test_foundations()
     else:
@@ -1087,7 +1176,12 @@ async def main(no_db_mode: bool = False):
         )
         foundations = load_foundations_from_csv(csv_path)
     
-    print(f"Processing {len(foundations)} foundations...")
+    # Also load funders without websites (for Charity Commission crawling)
+    funders_without_websites = load_funders_without_websites()
+    
+    print(f"Processing {len(foundations)} foundations with websites...")
+    if funders_without_websites:
+        print(f"Also processing {len(funders_without_websites)} funders via Charity Commission pages...")
     print(f"Concurrency: {MAX_CONCURRENT_FOUNDATIONS} workers")
     print(f"Change detection: {'ENABLED' if CHANGE_DETECTION_ENABLED else 'DISABLED'}")
     print()
@@ -1109,6 +1203,12 @@ async def main(no_db_mode: bool = False):
         process_foundation(name, url, semaphore, stats)
         for name, url in foundations
     ]
+    
+    # Process funders without websites via Charity Commission pages
+    for funder_id, name, charity_number in funders_without_websites:
+        tasks.append(
+            process_foundation(name, '', semaphore, stats, funder_id=funder_id, charity_number=charity_number)
+        )
     
     await asyncio.gather(*tasks)
     

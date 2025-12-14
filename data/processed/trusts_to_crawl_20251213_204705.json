@@ -1,0 +1,530 @@
+[
+  {
+    "regno": 1215819,
+    "name": "WESTMINSTER CATHEDRAL CHORAL FOUNDATION",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-19T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5244170,
+      "registered_charity_number": 1215819,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215965,
+    "name": "EDMONTON UNITED CHARITIES",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-27T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5245965,
+      "registered_charity_number": 1215965,
+      "linked_charity_number": 0,
+      "classification_code": 301,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Individuals"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215895,
+    "name": "FUTURE FWD",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-24T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5250726,
+      "registered_charity_number": 1215895,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215935,
+    "name": "UK/UKRAINE REHABILITATION CIO",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-25T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5252621,
+      "registered_charity_number": 1215935,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215597,
+    "name": "EASTBOURNE HIPPODROME FRIENDS",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-03T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5259133,
+      "registered_charity_number": 1215597,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215954,
+    "name": "THE ROTHERFIELD PRIMARY SCHOOL CHARITABLE FOUNDATION",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-27T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5261038,
+      "registered_charity_number": 1215954,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215858,
+    "name": "MAR THOMA CONGREGATION, TAUNTON",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-20T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5262294,
+      "registered_charity_number": 1215858,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215628,
+    "name": "SULEMAN AND SHAHZADA DAWOOD FOUNDATION",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-05T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5264790,
+      "registered_charity_number": 1215628,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215941,
+    "name": "MD HOPE FOUNDATION CIO",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-26T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5264973,
+      "registered_charity_number": 1215941,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215593,
+    "name": "CORNWALL WOMEN'S FUND LIMITED",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-03T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5265001,
+      "registered_charity_number": 1215593,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215665,
+    "name": "THE CARING HOMES GROUP TOGETHER FUND",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-06T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5265186,
+      "registered_charity_number": 1215665,
+      "linked_charity_number": 0,
+      "classification_code": 301,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Individuals"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215912,
+    "name": "PIRMAHAL AR MEDICARE FOUNDATION UK",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-25T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5265421,
+      "registered_charity_number": 1215912,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215600,
+    "name": "ST ANDREW'S SCHOOL (HOVE) DEVELOPMENT TRUST",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-03T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5265878,
+      "registered_charity_number": 1215600,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215636,
+    "name": "HEARTPRINT UK",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-05T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5267024,
+      "registered_charity_number": 1215636,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215646,
+    "name": "RAYS OF DAWN",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-05T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5268189,
+      "registered_charity_number": 1215646,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215709,
+    "name": "FARAH FOUNDATION",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-11T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5268529,
+      "registered_charity_number": 1215709,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215958,
+    "name": "ALL SAINTS CATHOLIC COLLEGE -THE MISSION FUND",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-27T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5268778,
+      "registered_charity_number": 1215958,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215645,
+    "name": "GOOD NEWS FOR ROMANIA (GNFR)",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-05T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5268939,
+      "registered_charity_number": 1215645,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215756,
+    "name": "THE MB COMMUNITY BUILDING TRUST",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-13T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5269127,
+      "registered_charity_number": 1215756,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215916,
+    "name": "LIBERTY LIFE GLOBAL",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-25T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5269642,
+      "registered_charity_number": 1215916,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215974,
+    "name": "MIDDLESBROUGH ROUND TABLE 34 CHARITABLE ACTIVITIES",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-27T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5270092,
+      "registered_charity_number": 1215974,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215769,
+    "name": "OAKMERE FOUNDATION",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-14T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5270790,
+      "registered_charity_number": 1215769,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215774,
+    "name": "SIR GEORGE MARTIN TRUST",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-14T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5270828,
+      "registered_charity_number": 1215774,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215867,
+    "name": "DELIVERANCE FIRE MINISTRIES",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-20T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5271028,
+      "registered_charity_number": 1215867,
+      "linked_charity_number": 0,
+      "classification_code": 301,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Individuals"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215832,
+    "name": "ASHRAFEE EDUCATIONAL FOUNDATION",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-19T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5272997,
+      "registered_charity_number": 1215832,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215669,
+    "name": "THE HORNSBY CHARITABLE TRUST",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-06T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5273415,
+      "registered_charity_number": 1215669,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215967,
+    "name": "WORKINGTON ROTARY CIO",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-27T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5273832,
+      "registered_charity_number": 1215967,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215651,
+    "name": "THE SHANAHAN FOUNDATION",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-06T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5274960,
+      "registered_charity_number": 1215651,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215919,
+    "name": "THE ORPHEUS CHARITY",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-25T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5275191,
+      "registered_charity_number": 1215919,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215618,
+    "name": "VETERANS SOCIETY",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-04T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5275379,
+      "registered_charity_number": 1215618,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215841,
+    "name": "FRIENDS OF ST GREGORY SCHOOL",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-19T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5275713,
+      "registered_charity_number": 1215841,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215905,
+    "name": "THE WHATMORE CHARITABLE TRUST",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-24T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5276198,
+      "registered_charity_number": 1215905,
+      "linked_charity_number": 0,
+      "classification_code": 302,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Organisations"
+    },
+    "initial_classification": "Needs Review"
+  },
+  {
+    "regno": 1215996,
+    "name": "THE IRENE OGDEN MEMORIAL FUND",
+    "reg_status": "Registered",
+    "reg_date": "2025-11-28T00:00:00",
+    "classification": {
+      "date_of_extract": "2025-12-13T00:00:00",
+      "organisation_number": 5276971,
+      "registered_charity_number": 1215996,
+      "linked_charity_number": 0,
+      "classification_code": 301,
+      "classification_type": "How",
+      "classification_description": "Makes Grants To Individuals"
+    },
+    "initial_classification": "Needs Review"
+  }
+]
