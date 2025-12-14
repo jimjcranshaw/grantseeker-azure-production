@@ -39,3 +39,7 @@ test_results/
 
 # Playwright
 .playwright/
+
+# Large data files
+data/archive/*.zip
+data/processed/publicextract.charity/*.json
