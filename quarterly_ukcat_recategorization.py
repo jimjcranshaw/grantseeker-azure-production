@@ -130,10 +130,15 @@ class QuarterlyRecategorizer:
     
     def _save_progress(self, last_processed_id: int):
         """Save progress for resume capability."""
+        # Convert datetime objects to strings for JSON serialization
+        stats_copy = self.stats.copy()
+        if 'start_time' in stats_copy:
+            stats_copy['start_time'] = stats_copy['start_time'].isoformat()
+        
         progress = {
             'last_processed_id': last_processed_id,
             'timestamp': datetime.now().isoformat(),
-            'stats': self.stats
+            'stats': stats_copy
         }
         try:
             with open(self.progress_file, 'w') as f:
@@ -325,9 +330,15 @@ class QuarterlyRecategorizer:
         
         # Save report to file
         report_file = Path(f'quarterly_recategorization_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
+        
+        # Convert datetime objects to strings for JSON serialization
+        stats_copy = self.stats.copy()
+        if 'start_time' in stats_copy:
+            stats_copy['start_time'] = stats_copy['start_time'].isoformat()
+        
         report_data = {
             'timestamp': datetime.now().isoformat(),
-            'stats': self.stats,
+            'stats': stats_copy,
             'elapsed_minutes': elapsed_time
         }
         
