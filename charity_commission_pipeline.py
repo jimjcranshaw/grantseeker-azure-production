@@ -40,6 +40,7 @@ from langchain_core.documents import Document
 from simple_llm_analysis import analyze_with_direct_llm
 import logging
 from concurrent.futures import ThreadPoolExecutor
+import threading
 
 # Load environment variables
 load_dotenv()
@@ -100,7 +101,9 @@ DEEPSEEK_OCR_REQUIRED = True  # Documents are REQUIRED for Charity Commission fo
 DEEPSEEK_OCR_RATE_LIMIT_DELAY = 0.6  # 100 requests/minute = 0.6 seconds between requests
 
 # Global PaddleOCR instance cache (to avoid re-initialization)
+# Use thread-safe initialization with a lock
 _paddleocr_instance = None
+_paddleocr_lock = threading.Lock()
 # Legacy Docling config (kept for backward compatibility, but not used)
 MAX_CONCURRENT_DOCLING = 2
 DOCLING_TIMEOUT = 900
@@ -1444,43 +1447,56 @@ def process_document_with_paddleocr_sync(url: str, foundation_name: str, session
             logger.info(f"    ✓ Downloaded {file_size:,} bytes")
                 
         try:
-            # 2. Initialize PaddleOCR (cached globally to avoid re-initialization)
+            # 2. Initialize PaddleOCR (thread-safe cached globally to avoid re-initialization)
+            global _paddleocr_instance
             if _paddleocr_instance is None:
-                logger.info(f"    🔧 Initializing PaddleOCR (first time, may take a moment)...")
-                _paddleocr_instance = PaddleOCR(use_textline_orientation=True, lang='en')
-                logger.info(f"    ✓ PaddleOCR initialized successfully")
+                with _paddleocr_lock:
+                    # Double-check pattern to avoid race conditions
+                    if _paddleocr_instance is None:
+                        logger.info(f"    🔧 Initializing PaddleOCR (first time, may take a moment)...")
+                        _paddleocr_instance = PaddleOCR(use_textline_orientation=True, lang='en')
+                        logger.info(f"    ✓ PaddleOCR initialized successfully")
             ocr = _paddleocr_instance
             
             # 3. Process PDF - PaddleOCR can handle PDFs directly
-            # Note: Newer PaddleOCR versions don't support 'cls' parameter
-            if suffix.lower() == '.pdf':
-                # For PDFs, PaddleOCR processes page by page
+            # Use predict() method as recommended (ocr() is deprecated)
+            logger.debug(f"    🔍 Running PaddleOCR on {suffix} file ({file_size:,} bytes)...")
+            try:
+                # Try predict() first (newer API)
+                result = ocr.predict(temp_path)
+            except (AttributeError, TypeError):
+                # Fallback to ocr() if predict() doesn't work
                 result = ocr.ocr(temp_path)
-            else:
-                # For images
-                result = ocr.ocr(temp_path)
+            
+            logger.debug(f"    ✓ PaddleOCR processing completed, extracting text...")
             
             # 4. Extract text from OCR results
             # PaddleOCR returns: [[[bbox, (text, confidence)], ...], ...] for each page
             text_lines = []
-            if result and result[0]:
-                for page_result in result:
-                    if page_result:
-                        for line in page_result:
-                            if line and len(line) >= 2:
-                                text_content = line[1][0] if isinstance(line[1], tuple) else str(line[1])
-                                confidence = line[1][1] if isinstance(line[1], tuple) and len(line[1]) > 1 else 1.0
-                                # Only include lines with reasonable confidence
-                                if confidence > 0.5:
-                                    text_lines.append(text_content)
+            if result:
+                # Handle different result formats
+                if isinstance(result, list) and len(result) > 0:
+                    for page_result in result:
+                        if page_result:
+                            for line in page_result:
+                                if line and len(line) >= 2:
+                                    text_content = line[1][0] if isinstance(line[1], tuple) else str(line[1])
+                                    confidence = line[1][1] if isinstance(line[1], tuple) and len(line[1]) > 1 else 1.0
+                                    # Only include lines with reasonable confidence
+                                    if confidence > 0.5:
+                                        text_lines.append(text_content)
+                else:
+                    logger.warning(f"    ⚠️ Unexpected PaddleOCR result format: {type(result)}")
             
             if not text_lines:
-                logger.warning(f"    ⚠️ PaddleOCR returned no text for {url}")
+                logger.warning(f"    ⚠️ PaddleOCR returned no text for {url} (result: {type(result)}, length: {len(result) if result else 0})")
                 return None
             
             # 5. Combine text and format as markdown
             text_content = "\n".join(text_lines)
             markdown_content = f"```\n{text_content}\n```"
+            
+            logger.info(f"    ✓ PaddleOCR extracted {len(text_lines)} text lines ({len(text_content):,} chars) from {url[:80]}...")
             
             # 6. Create page-like structure
             return {
