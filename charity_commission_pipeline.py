@@ -1462,10 +1462,11 @@ def process_document_with_paddleocr_sync(url: str, foundation_name: str, session
             # Use predict() method as recommended (ocr() is deprecated)
             logger.debug(f"    🔍 Running PaddleOCR on {suffix} file ({file_size:,} bytes)...")
             try:
-                # Try predict() first (newer API)
-                result = ocr.predict(temp_path)
-            except (AttributeError, TypeError):
+                # Try predict() first (newer API) - predict() expects input parameter
+                result = ocr.predict(input=temp_path)
+            except (AttributeError, TypeError, Exception) as e:
                 # Fallback to ocr() if predict() doesn't work
+                logger.debug(f"    ⚠️ predict() failed ({str(e)[:50]}), using ocr() fallback...")
                 result = ocr.ocr(temp_path)
             
             logger.debug(f"    ✓ PaddleOCR processing completed, extracting text...")
