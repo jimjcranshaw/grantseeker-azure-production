@@ -1093,6 +1093,13 @@ def process_document_with_llmocr_sync(url: str, foundation_name: str, session_co
                 os.remove(temp_path)
                 
     except Exception as e:
+        error_msg = str(e)
+        # Check if it's an API key exhaustion error (500) or other error
+        if "500" in error_msg or "API keys exhausted" in error_msg or "statusText" in error_msg:
+            logger.warning(f"    ⚠️ LLMOCR backend unavailable for {url}: {error_msg[:100]}")
+            # Return None to trigger fallback
+            return None
+        else:
         logger.error(f"    ❌ LLMOCR processing failed for {url}: {str(e)}")
         return None
 
@@ -1377,14 +1384,134 @@ def process_document_with_gcp_documentai_sync(url: str, foundation_name: str, se
         logger.error(f"    ❌ Google Cloud Document AI processing failed for {url}: {str(e)}")
         return None
 
+def process_document_with_paddleocr_sync(url: str, foundation_name: str, session_cookies: Optional[Dict] = None) -> Optional[Dict]:
+    """
+    Process document using PaddleOCR (FREE, open-source, local processing).
+    No API keys needed - runs locally. Good fallback when cloud services fail.
+    """
+    try:
+        from paddleocr import PaddleOCR
+        
+        logger.info(f"    📄 Processing document with PaddleOCR (free, local): {url[:100]}...")
+        
+        # 1. Download document to temp file
+        parsed_url = urlparse(url)
+        filename = os.path.basename(parsed_url.path)
+        if not filename:
+            filename = "document"
+        suffix = Path(filename).suffix
+        if not suffix:
+            suffix = ".pdf"  # Default to pdf if unknown
+            
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_file:
+            temp_path = tmp_file.name
+            
+            # Download with requests
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/pdf,application/octet-stream,*/*',
+            }
+            
+            try:
+                response = requests.get(url, stream=True, timeout=60, headers=headers, cookies=session_cookies, allow_redirects=True)
+                response.raise_for_status()
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 403:
+                    logger.warning(f"    ⚠️ Got 403, retrying without cookies...")
+                    response = requests.get(url, stream=True, timeout=60, headers=headers, allow_redirects=True)
+                    response.raise_for_status()
+                else:
+                    raise
+            
+            file_size = 0
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    tmp_file.write(chunk)
+                    file_size += len(chunk)
+            
+            if file_size == 0:
+                raise ValueError("Downloaded file is empty")
+            
+            logger.debug(f"    Downloaded {file_size:,} bytes")
+                
+        try:
+            # 2. Initialize PaddleOCR (use_angle_cls=True for better accuracy, lang='en' for English)
+            ocr = PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
+            
+            # 3. Process PDF - PaddleOCR can handle PDFs directly
+            if suffix.lower() == '.pdf':
+                # For PDFs, PaddleOCR processes page by page
+                result = ocr.ocr(temp_path, cls=True)
+            else:
+                # For images
+                result = ocr.ocr(temp_path, cls=True)
+            
+            # 4. Extract text from OCR results
+            # PaddleOCR returns: [[[bbox, (text, confidence)], ...], ...] for each page
+            text_lines = []
+            if result and result[0]:
+                for page_result in result:
+                    if page_result:
+                        for line in page_result:
+                            if line and len(line) >= 2:
+                                text_content = line[1][0] if isinstance(line[1], tuple) else str(line[1])
+                                confidence = line[1][1] if isinstance(line[1], tuple) and len(line[1]) > 1 else 1.0
+                                # Only include lines with reasonable confidence
+                                if confidence > 0.5:
+                                    text_lines.append(text_content)
+            
+            if not text_lines:
+                logger.warning(f"    ⚠️ PaddleOCR returned no text for {url}")
+                return None
+            
+            # 5. Combine text and format as markdown
+            text_content = "\n".join(text_lines)
+            markdown_content = f"```\n{text_content}\n```"
+            
+            # 6. Create page-like structure
+            return {
+                'url': url,
+                'title': f"Document: {filename}",
+                'content': markdown_content[:50000],  # Limit content to 50k chars
+                'depth': 0,
+                'type': 'document'
+            }
+            
+        finally:
+            # Cleanup temp file
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+                
+    except ImportError:
+        logger.debug("    ⚠️ PaddleOCR not installed. Install with: pip install paddleocr")
+        return None
+    except Exception as e:
+        logger.warning(f"    ⚠️ PaddleOCR processing failed for {url}: {str(e)}")
+        return None
+
 def process_document_with_ocr_sync(url: str, foundation_name: str, session_cookies: Optional[Dict] = None) -> Optional[Dict]:
     """
     Main OCR processing function - routes to appropriate provider based on configuration.
-    Priority: LLMOCR (CHEAPEST: $53.88 for 12k docs) > Azure Document Intelligence > Google Cloud Document AI > DeepSeek OCR
+    Priority: LLMOCR (CHEAPEST) > PaddleOCR (FREE fallback) > Azure Document Intelligence > Google Cloud Document AI > DeepSeek OCR
+    
+    If LLMOCR fails (e.g., backend API keys exhausted), automatically falls back to PaddleOCR.
     """
     # Try LLMOCR first (CHEAPEST: $0.00449/doc = $53.88 for 12k docs, 82% cheaper than Azure/GCP)
     if LLMOCR_API_KEY:
-        return process_document_with_llmocr_sync(url, foundation_name, session_cookies)
+        result = process_document_with_llmocr_sync(url, foundation_name, session_cookies)
+        # If LLMOCR fails due to backend issues, try PaddleOCR as backup
+        if result is None:
+            logger.info(f"    🔄 LLMOCR failed, trying PaddleOCR backup (free, local)...")
+            result = process_document_with_paddleocr_sync(url, foundation_name, session_cookies)
+            if result:
+                return result
+        elif result:
+            return result
+    
+    # Try PaddleOCR as primary if LLMOCR not configured (FREE, open-source)
+    result = process_document_with_paddleocr_sync(url, foundation_name, session_cookies)
+    if result:
+        return result
     
     # Fall back to Azure Document Intelligence ($1.50/1k pages = $306 for 12k docs)
     if AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT and AZURE_DOCUMENT_INTELLIGENCE_KEY:
@@ -1398,7 +1525,7 @@ def process_document_with_ocr_sync(url: str, foundation_name: str, session_cooki
     if DEEPSEEK_OCR_API_KEY or DEEPSEEK_OCR_BASE_URL:
         return process_document_with_deepseek_ocr_sync(url, foundation_name, session_cookies)
     
-    logger.error("    ❌ No OCR provider configured. Set LLMOCR_API_KEY (cheapest), AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT+KEY, GOOGLE_APPLICATION_CREDENTIALS+GCP_PROJECT_ID+GCP_PROCESSOR_ID, or DEEPSEEK_OCR_API_KEY")
+    logger.error("    ❌ No OCR provider configured. Set LLMOCR_API_KEY (cheapest), install PaddleOCR (free), AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT+KEY, GOOGLE_APPLICATION_CREDENTIALS+GCP_PROJECT_ID+GCP_PROCESSOR_ID, or DEEPSEEK_OCR_API_KEY")
     return None
 
 def process_document_with_deepseek_ocr_sync(url: str, foundation_name: str, session_cookies: Optional[Dict] = None) -> Optional[Dict]:
