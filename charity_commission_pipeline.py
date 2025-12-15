@@ -1452,12 +1452,13 @@ def process_document_with_paddleocr_sync(url: str, foundation_name: str, session
             ocr = _paddleocr_instance
             
             # 3. Process PDF - PaddleOCR can handle PDFs directly
+            # Note: Newer PaddleOCR versions don't support 'cls' parameter
             if suffix.lower() == '.pdf':
                 # For PDFs, PaddleOCR processes page by page
-                result = ocr.ocr(temp_path, cls=True)
+                result = ocr.ocr(temp_path)
             else:
                 # For images
-                result = ocr.ocr(temp_path, cls=True)
+                result = ocr.ocr(temp_path)
             
             # 4. Extract text from OCR results
             # PaddleOCR returns: [[[bbox, (text, confidence)], ...], ...] for each page
