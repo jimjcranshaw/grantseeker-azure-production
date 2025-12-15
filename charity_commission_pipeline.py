@@ -94,10 +94,13 @@ CRAWL_MAX_DEPTH = 3  # Maximum crawl depth
 CRAWL_MAX_PAGES = 50  # Maximum pages per foundation
 # DeepSeek OCR Configuration (replacing Docling)
 MAX_CONCURRENT_DEEPSEEK_OCR = 2  # Process 2 documents concurrently
-DEEPSEEK_OCR_TIMEOUT = 60  # 60 seconds timeout per document (much faster than Docling)
+DEEPSEEK_OCR_TIMEOUT = 300  # 300 seconds (5 min) timeout per document - increased for PaddleOCR initialization
 DEEPSEEK_OCR_RETRIES = 2  # Retry failed documents up to 2 times
 DEEPSEEK_OCR_REQUIRED = True  # Documents are REQUIRED for Charity Commission foundations
 DEEPSEEK_OCR_RATE_LIMIT_DELAY = 0.6  # 100 requests/minute = 0.6 seconds between requests
+
+# Global PaddleOCR instance cache (to avoid re-initialization)
+_paddleocr_instance = None
 # Legacy Docling config (kept for backward compatibility, but not used)
 MAX_CONCURRENT_DOCLING = 2
 DOCLING_TIMEOUT = 900
@@ -1388,7 +1391,10 @@ def process_document_with_paddleocr_sync(url: str, foundation_name: str, session
     """
     Process document using PaddleOCR (FREE, open-source, local processing).
     No API keys needed - runs locally. Good fallback when cloud services fail.
+    Uses a cached PaddleOCR instance to avoid re-initialization overhead.
     """
+    global _paddleocr_instance
+    
     try:
         from paddleocr import PaddleOCR
         
@@ -1406,22 +1412,25 @@ def process_document_with_paddleocr_sync(url: str, foundation_name: str, session
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_file:
             temp_path = tmp_file.name
             
-            # Download with requests
+            # Download with requests (increased timeout for slow downloads)
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept': 'application/pdf,application/octet-stream,*/*',
             }
             
             try:
-                response = requests.get(url, stream=True, timeout=60, headers=headers, cookies=session_cookies, allow_redirects=True)
+                response = requests.get(url, stream=True, timeout=120, headers=headers, cookies=session_cookies, allow_redirects=True)
                 response.raise_for_status()
             except requests.exceptions.HTTPError as e:
                 if e.response.status_code == 403:
                     logger.warning(f"    ⚠️ Got 403, retrying without cookies...")
-                    response = requests.get(url, stream=True, timeout=60, headers=headers, allow_redirects=True)
+                    response = requests.get(url, stream=True, timeout=120, headers=headers, allow_redirects=True)
                     response.raise_for_status()
                 else:
                     raise
+            except requests.exceptions.Timeout:
+                logger.error(f"    ❌ Download timeout for {url[:80]}...")
+                raise
             
             file_size = 0
             for chunk in response.iter_content(chunk_size=8192):
@@ -1432,11 +1441,15 @@ def process_document_with_paddleocr_sync(url: str, foundation_name: str, session
             if file_size == 0:
                 raise ValueError("Downloaded file is empty")
             
-            logger.debug(f"    Downloaded {file_size:,} bytes")
+            logger.info(f"    ✓ Downloaded {file_size:,} bytes")
                 
         try:
-            # 2. Initialize PaddleOCR (use_textline_orientation=True for better accuracy, lang='en' for English)
-            ocr = PaddleOCR(use_textline_orientation=True, lang='en')
+            # 2. Initialize PaddleOCR (cached globally to avoid re-initialization)
+            if _paddleocr_instance is None:
+                logger.info(f"    🔧 Initializing PaddleOCR (first time, may take a moment)...")
+                _paddleocr_instance = PaddleOCR(use_textline_orientation=True, lang='en')
+                logger.info(f"    ✓ PaddleOCR initialized successfully")
+            ocr = _paddleocr_instance
             
             # 3. Process PDF - PaddleOCR can handle PDFs directly
             if suffix.lower() == '.pdf':
