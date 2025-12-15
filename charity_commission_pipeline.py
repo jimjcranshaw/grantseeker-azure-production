@@ -1435,8 +1435,8 @@ def process_document_with_paddleocr_sync(url: str, foundation_name: str, session
             logger.debug(f"    Downloaded {file_size:,} bytes")
                 
         try:
-            # 2. Initialize PaddleOCR (use_angle_cls=True for better accuracy, lang='en' for English)
-            ocr = PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
+            # 2. Initialize PaddleOCR (use_textline_orientation=True for better accuracy, lang='en' for English)
+            ocr = PaddleOCR(use_textline_orientation=True, lang='en')
             
             # 3. Process PDF - PaddleOCR can handle PDFs directly
             if suffix.lower() == '.pdf':

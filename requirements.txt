@@ -16,6 +16,10 @@ psycopg2-binary>=2.9.9
 # File Monitoring & Processing
 watchdog>=3.0.0
 
+# OCR
+paddleocr>=2.7.0
+paddlepaddle>=2.5.0
+
 # Utilities
 requests>=2.31.0
 python-dotenv>=1.0.0
