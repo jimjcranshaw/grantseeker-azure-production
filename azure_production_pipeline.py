@@ -43,6 +43,7 @@ from crawl4ai.async_configs import CrawlerRunConfig, BrowserConfig
 from langchain_core.documents import Document
 from simple_llm_analysis import analyze_with_direct_llm
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 # Load environment variables
 load_dotenv()
@@ -78,6 +79,8 @@ MAX_CONCURRENT_CRAWLS = 10  # Crawl 10 pages per foundation in parallel
 DB_POOL_SIZE = 20  # Database connection pool size (kept high for safety)
 CRAWL_MAX_DEPTH = 3  # Maximum crawl depth
 CRAWL_MAX_PAGES = 50  # Maximum pages per foundation
+MAX_CONCURRENT_DOCLING = 3  # Process up to 3 documents concurrently with Docling (reduced to prevent CPU overload)
+DOCLING_TIMEOUT = 300  # Timeout per document in seconds (5 minutes for large PDFs with OCR)
 
 # Change Detection Configuration
 CHANGE_DETECTION_ENABLED = True  # Enable HTTP HEAD change detection
@@ -288,9 +291,61 @@ def get_url_depth(url: str, base_url: str) -> int:
     except Exception:
         return 0
 
+async def extract_charity_commission_documents(crawler: AsyncWebCrawler, base_url: str, charity_number: str) -> List[str]:
+    """
+    Extract document download URLs from Charity Commission pages.
+    Specifically checks accounts-and-annual-returns and governing-document pages.
+    """
+    import html
+    documents_to_process = []
+    base_domain = urlparse(base_url).netloc
+    
+    # Pages to check for documents
+    doc_pages = [
+        f"https://{base_domain}/en/charity-search/-/charity-details/{charity_number}/accounts-and-annual-returns?_uk_gov_ccew_onereg_charitydetails_web_portlet_CharityDetailsPortlet_organisationNumber={charity_number}",
+        f"https://{base_domain}/en/charity-search/-/charity-details/{charity_number}/governing-document?_uk_gov_ccew_onereg_charitydetails_web_portlet_CharityDetailsPortlet_organisationNumber={charity_number}",
+    ]
+    
+    crawler_config = CrawlerRunConfig(
+        wait_until="domcontentloaded",
+        page_timeout=30000,
+        cache_mode="bypass"
+    )
+    
+    for doc_page_url in doc_pages:
+        try:
+            result = await crawler.arun(url=doc_page_url, config=crawler_config)
+            if result.success and result.html:
+                html_content = result.html
+                # Look for download links - Charity Commission uses specific patterns
+                # Pattern 1: Links with p_p_resource_id=/accounts-resource (PDF downloads)
+                import re
+                download_patterns = [
+                    r'href=["\']([^"\']*p_p_resource_id=[^"\']*accounts-resource[^"\']*)["\']',
+                    r'href=["\']([^"\']*p_p_resource_id=[^"\']*governing-document-resource[^"\']*)["\']',
+                    r'href=["\']([^"\']*\.pdf[^"\']*)["\']',
+                ]
+                
+                for pattern in download_patterns:
+                    matches = re.findall(pattern, html_content, re.IGNORECASE)
+                    for match in matches:
+                        # Decode HTML entities (&amp; -> &)
+                        decoded_url = html.unescape(match)
+                        # Make absolute URL
+                        full_url = urljoin(doc_page_url, decoded_url)
+                        if full_url not in documents_to_process:
+                            documents_to_process.append(full_url)
+                
+                logger.info(f"    ✓ Found {len([d for d in documents_to_process if doc_page_url.split('/')[-1].split('?')[0] in d])} documents on {doc_page_url.split('/')[-1].split('?')[0]}")
+        except Exception as e:
+            logger.warning(f"    ⚠️ Failed to extract documents from {doc_page_url}: {str(e)}")
+    
+    return documents_to_process
+
 async def crawl_foundation(url: str, name: str) -> List[Dict]:
     """
     Crawl a foundation website using crawl4ai with sitemap support and intelligent filtering.
+    Special handling for Charity Commission pages to extract documents.
     """
     browser_config = BrowserConfig(
         headless=True,
@@ -306,6 +361,7 @@ async def crawl_foundation(url: str, name: str) -> List[Dict]:
     
     pages = []
     base_domain = urlparse(url).netloc
+    is_charity_commission = 'charitycommission.gov.uk' in url.lower()
     
     # Track documents for Docling processing later
     documents_to_process = []
@@ -319,6 +375,19 @@ async def crawl_foundation(url: str, name: str) -> List[Dict]:
                 url=url,
                 config=crawler_config
             )
+            
+            # Extract charity number if this is a Charity Commission page
+            charity_number = None
+            if is_charity_commission:
+                import re
+                match = re.search(r'regId=(\d+)', url)
+                if match:
+                    charity_number = match.group(1)
+                    logger.info(f"    📋 Detected Charity Commission page for charity #{charity_number}")
+                    # Extract documents from specific Charity Commission document pages
+                    cc_docs = await extract_charity_commission_documents(crawler, url, charity_number)
+                    documents_to_process.extend(cc_docs)
+                    logger.info(f"    📄 Found {len(cc_docs)} Charity Commission documents")
             
             # Collect URLs from sitemap and crawl
             all_discovered_urls = set()
@@ -347,14 +416,12 @@ async def crawl_foundation(url: str, name: str) -> List[Dict]:
                 # Check for documents (PDF/DOCX) - including Charity Commission document links
                 is_document = (
                     re.search(r"\.(pdf|doc|docx)$", normalized_url.lower()) or
-                    'annual-accounts' in normalized_url.lower() or
-                    'articles-of-association' in normalized_url.lower() or
-                    'governing-document' in normalized_url.lower() or
-                    'download' in normalized_url.lower() and ('pdf' in normalized_url.lower() or 'doc' in normalized_url.lower())
+                    ('download' in normalized_url.lower() and 'p_p_resource_id' in normalized_url.lower())
                 )
                 if is_document:
                     if is_relevant_path(urlparse(normalized_url).path) or 'charitycommission.gov.uk' in normalized_url:
-                        documents_to_process.append(normalized_url)
+                        if normalized_url not in documents_to_process:
+                            documents_to_process.append(normalized_url)
                     continue
 
                 # Filter regular pages
@@ -395,16 +462,89 @@ async def crawl_foundation(url: str, name: str) -> List[Dict]:
                 except Exception as e:
                     logger.warning(f"    ⚠️ Failed to crawl {current_url}: {str(e)}")
             
-            # 4. Process found documents with Docling
+            # 4. Process found documents with Docling (in parallel)
             if documents_to_process:
+                import time as time_module
+                doc_start_time = time_module.time()
                 logger.info(f"    📄 Found {len(documents_to_process)} documents for Docling processing")
-                for doc_url in documents_to_process[:5]: # Limit to 5 documents per site for now
+                
+                # Extract cookies from browser session for authenticated downloads
+                session_cookies = {}
+                try:
+                    # Access playwright browser through crawl4ai
+                    if hasattr(crawler, '_browser') and crawler._browser:
+                        browser = crawler._browser
+                        if hasattr(browser, 'contexts') and browser.contexts:
+                            context = browser.contexts[0]
+                            cookies = await context.cookies()
+                            session_cookies = {cookie['name']: cookie['value'] for cookie in cookies}
+                            logger.debug(f"    Extracted {len(session_cookies)} cookies from browser session")
+                except Exception as e:
+                    logger.debug(f"    Could not extract browser cookies: {e}")
+                
+                # Process documents in parallel using ThreadPoolExecutor
+                # Access global config variables
+                max_concurrent = globals().get('MAX_CONCURRENT_DOCLING', 5)
+                docling_timeout = globals().get('DOCLING_TIMEOUT', 120)
+                
+                async def process_single_document(doc_url: str, idx: int, total: int, executor: ThreadPoolExecutor):
+                    """Process a single document using thread pool executor."""
+                    doc_start = time_module.time()
                     try:
-                        doc_content = await process_document_with_docling(doc_url, name)
+                        logger.info(f"    📄 [{idx}/{total}] Starting document processing: {doc_url[:80]}...")
+                        # Run Docling in thread pool executor (better control than default executor)
+                        loop = asyncio.get_event_loop()
+                        doc_content = await asyncio.wait_for(
+                            loop.run_in_executor(
+                                executor,
+                                process_document_with_docling_sync,
+                                doc_url,
+                                name,
+                                session_cookies if session_cookies else None
+                            ),
+                            timeout=docling_timeout
+                        )
+                        doc_elapsed = time_module.time() - doc_start
                         if doc_content:
-                            pages.append(doc_content)
+                            content_len = len(doc_content.get('content', ''))
+                            logger.info(f"    ✓ [{idx}/{total}] Successfully processed in {doc_elapsed:.1f}s ({content_len:,} chars)")
+                            return doc_content
+                        else:
+                            logger.warning(f"    ⚠️ [{idx}/{total}] Processing returned no content after {doc_elapsed:.1f}s")
+                            return None
+                    except asyncio.TimeoutError:
+                        doc_elapsed = time_module.time() - doc_start
+                        logger.warning(f"    ⚠️ [{idx}/{total}] Timed out after {doc_elapsed:.1f}s: {doc_url[:80]}...")
+                        return None
                     except Exception as e:
-                        logger.warning(f"    ⚠️ Docling failed for {doc_url}: {e}")
+                        doc_elapsed = time_module.time() - doc_start
+                        logger.warning(f"    ⚠️ [{idx}/{total}] Failed after {doc_elapsed:.1f}s: {e}")
+                        return None
+                
+                # Process up to 10 documents in parallel using ThreadPoolExecutor
+                doc_urls = documents_to_process[:10]
+                
+                # Create thread pool executor with controlled concurrency
+                with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
+                    tasks = [
+                        process_single_document(doc_url, idx + 1, len(doc_urls), executor)
+                        for idx, doc_url in enumerate(doc_urls)
+                    ]
+                    
+                    # Wait for all document processing tasks to complete
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Collect successful results
+                processed_docs = [doc for doc in results if doc is not None and not isinstance(doc, Exception)]
+                pages.extend(processed_docs)
+                processed_count = len(processed_docs)
+                doc_total_time = time_module.time() - doc_start_time
+                
+                if processed_count > 0:
+                    avg_time = doc_total_time / processed_count if processed_count > 0 else 0
+                    logger.info(f"    ✅ Processed {processed_count}/{len(doc_urls)} documents in {doc_total_time:.1f}s (avg: {avg_time:.1f}s/doc, {max_concurrent} workers)")
+                else:
+                    logger.warning(f"    ⚠️ No documents were successfully processed after {doc_total_time:.1f}s")
 
         except Exception as e:
             logger.error(f"  ❌ Crawl failed for {url}: {str(e)}")
@@ -412,14 +552,66 @@ async def crawl_foundation(url: str, name: str) -> List[Dict]:
     logger.info(f"  📊 Crawled {len(pages)} pages + documents from {url}")
     return pages
 
-async def process_document_with_docling(url: str, foundation_name: str) -> Optional[Dict]:
+async def process_document_content_with_docling(content: bytes, url: str, foundation_name: str) -> Optional[Dict]:
     """
+    Process document content (already downloaded) with Docling.
+    """
+    try:
+        from docling.document_converter import DocumentConverter
+        
+        logger.info(f"    📄 Processing document content with Docling: {url[:100]}...")
+        
+        # Save content to temp file
+        parsed_url = urlparse(url)
+        filename = os.path.basename(parsed_url.path)
+        if not filename:
+            filename = "document"
+        suffix = Path(filename).suffix
+        if not suffix:
+            suffix = ".pdf" # Default to pdf if unknown
+            
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_file:
+            temp_path = tmp_file.name
+            tmp_file.write(content)
+        
+        try:
+            # Convert with Docling
+            converter = DocumentConverter()
+            result = converter.convert(temp_path)
+            
+            # Extract content (Markdown format is good for LLMs)
+            markdown_content = result.document.export_to_markdown()
+            
+            # Create page-like structure
+            return {
+                'url': url,
+                'title': f"Document: {filename}",
+                'content': markdown_content[:50000], # Limit content
+                'depth': 0, # Treat docs as depth 0 importance
+                'type': 'document'
+            }
+            
+        finally:
+            # Cleanup temp file
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+                
+    except ImportError:
+        logger.error("    ❌ Docling not installed. Please install 'docling' to process documents.")
+        return None
+    except Exception as e:
+        logger.error(f"    ❌ Docling processing failed for {url}: {str(e)}")
+        return None
+
+def process_document_with_docling_sync(url: str, foundation_name: str, session_cookies: Optional[Dict] = None) -> Optional[Dict]:
+    """
+    Synchronous version of document processing for use with executor.
     Downloads and processes a document (PDF/DOCX) using Docling.
     """
     try:
         from docling.document_converter import DocumentConverter
         
-        logger.info(f"    📄 Processing document with Docling: {url}")
+        logger.info(f"    📄 Processing document with Docling: {url[:100]}...")
         
         # 1. Download document to temp file
         parsed_url = urlparse(url)
@@ -433,8 +625,108 @@ async def process_document_with_docling(url: str, foundation_name: str) -> Optio
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_file:
             temp_path = tmp_file.name
             
-            # Download with requests
-            response = requests.get(url, stream=True, timeout=30)
+            # Download with requests - use session cookies for Charity Commission
+            # Use more complete headers to mimic browser
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/pdf,application/octet-stream,*/*',
+                'Accept-Language': 'en-GB,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Referer': 'https://register-of-charities.charitycommission.gov.uk/',
+                'Connection': 'keep-alive',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'same-origin'
+            }
+            
+            # Try download with cookies first
+            try:
+                response = requests.get(url, stream=True, timeout=60, headers=headers, cookies=session_cookies, allow_redirects=True)
+                response.raise_for_status()
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 403:
+                    # If 403, try without cookies (some PDFs might be public)
+                    logger.warning(f"    ⚠️ Got 403 with cookies, retrying without cookies...")
+                    response = requests.get(url, stream=True, timeout=60, headers=headers, allow_redirects=True)
+                    response.raise_for_status()
+                else:
+                    raise
+            
+            # Check if we got a PDF by checking Content-Type header
+            content_type = response.headers.get('Content-Type', '').lower()
+            if 'pdf' not in content_type and not url.lower().endswith('.pdf'):
+                logger.warning(f"    ⚠️ Response Content-Type is '{content_type}', may not be a PDF")
+                # Still try to process it - could be PDF with wrong content-type
+            
+            # Download the file content
+            file_size = 0
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:  # filter out keep-alive new chunks
+                    tmp_file.write(chunk)
+                    file_size += len(chunk)
+            
+            # Verify we got content
+            if file_size == 0:
+                raise ValueError("Downloaded file is empty")
+            
+            logger.debug(f"    Downloaded {file_size:,} bytes")
+                
+        try:
+            # 2. Convert with Docling
+            converter = DocumentConverter()
+            result = converter.convert(temp_path)
+            
+            # 3. Extract content (Markdown format is good for LLMs)
+            markdown_content = result.document.export_to_markdown()
+            
+            # 4. Create page-like structure
+            return {
+                'url': url,
+                'title': f"Document: {filename}",
+                'content': markdown_content[:50000], # Limit content
+                'depth': 0, # Treat docs as depth 0 importance
+                'type': 'document'
+            }
+            
+        finally:
+            # Cleanup temp file
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+                
+    except ImportError:
+        logger.error("    ❌ Docling not installed. Please install 'docling' to process documents.")
+        return None
+    except Exception as e:
+        logger.error(f"    ❌ Docling processing failed for {url}: {str(e)}")
+        return None
+
+async def process_document_with_docling(url: str, foundation_name: str, session_cookies: Optional[Dict] = None) -> Optional[Dict]:
+    """
+    Downloads and processes a document (PDF/DOCX) using Docling.
+    Uses session cookies if provided (for Charity Commission downloads).
+    """
+    try:
+        from docling.document_converter import DocumentConverter
+        
+        logger.info(f"    📄 Processing document with Docling: {url[:100]}...")
+        
+        # 1. Download document to temp file
+        parsed_url = urlparse(url)
+        filename = os.path.basename(parsed_url.path)
+        if not filename:
+            filename = "document"
+        suffix = Path(filename).suffix
+        if not suffix:
+            suffix = ".pdf" # Default to pdf if unknown
+            
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_file:
+            temp_path = tmp_file.name
+            
+            # Download with requests - use session cookies for Charity Commission
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            response = requests.get(url, stream=True, timeout=30, headers=headers, cookies=session_cookies)
             response.raise_for_status()
             
             for chunk in response.iter_content(chunk_size=8192):
@@ -891,6 +1183,7 @@ async def process_foundation(name: str, url: str, semaphore: asyncio.Semaphore, 
         stats: Statistics dictionary
         funder_id: Optional funder ID (if already known)
     """
+    foundation_start_time = time.time()
     async with semaphore:
         try:
             logger.info(f"\n{'='*70}")
@@ -925,10 +1218,14 @@ async def process_foundation(name: str, url: str, semaphore: asyncio.Semaphore, 
             # Crawl foundation website or Charity Commission page
             source_type = "Charity Commission page" if is_charity_commission else "website"
             logger.info(f"  🔍 Crawling {source_type}: {url}")
-            start_time = time.time()
+            crawl_start_time = time.time()
             pages = await crawl_foundation(url, name)
-            elapsed_time = time.time() - start_time
-            logger.info(f"  ⏱️ Crawling completed in {elapsed_time:.2f} seconds")
+            crawl_elapsed = time.time() - crawl_start_time
+            
+            # Count documents vs regular pages
+            doc_count = len([p for p in pages if p.get('type') == 'document'])
+            page_count = len([p for p in pages if p.get('type') != 'document'])
+            logger.info(f"  ⏱️ Crawling completed in {crawl_elapsed:.1f}s ({page_count} pages, {doc_count} documents)")
             
             logger.debug(f"  Crawled pages: {len(pages)}")
             
@@ -946,7 +1243,12 @@ async def process_foundation(name: str, url: str, semaphore: asyncio.Semaphore, 
             
             # Analyze content
             logger.info(f"  🤖 Analyzing with DeepSeek (direct API)...")
+            analysis_start_time = time.time()
             analysis = await analyze_foundation_content(pages, name)
+            analysis_elapsed = time.time() - analysis_start_time
+            
+            opp_count = len(analysis.get('opportunities', []))
+            logger.info(f"  ⏱️ Analysis completed in {analysis_elapsed:.1f}s ({opp_count} opportunities found)")
             
             # Update classification
             is_grantmaking = analysis.get('is_grantmaking_charity')
@@ -959,11 +1261,13 @@ async def process_foundation(name: str, url: str, semaphore: asyncio.Semaphore, 
             # Complete session
             complete_scrape_session(session_id)
             
-            logger.info(f"  ✅ Completed {name}")
+            foundation_total_time = time.time() - foundation_start_time
+            logger.info(f"  ✅ Completed {name} in {foundation_total_time:.1f}s total")
             stats['completed'] += 1
             
         except Exception as e:
-            logger.error(f"  ❌ Error processing {name}: {str(e)}")
+            foundation_total_time = time.time() - foundation_start_time
+            logger.error(f"  ❌ Error processing {name} after {foundation_total_time:.1f}s: {str(e)}")
             stats['failed'] += 1
 
 def load_foundations_from_csv(csv_path: str) -> List[tuple[str, str]]:
@@ -1166,10 +1470,18 @@ async def main(no_db_mode: bool = False):
     stats = {
         'completed': 0,
         'skipped': 0,
-        'failed': 0
+        'failed': 0,
+        'total_foundations': len(foundations) + len(funders_with_cc_urls),
+        'start_time': datetime.now()
     }
     
     start_time = datetime.now()
+    total_foundations = len(foundations) + len(funders_with_cc_urls)
+    
+    print(f"Total foundations to process: {total_foundations}")
+    print(f"  - With websites: {len(foundations)}")
+    print(f"  - Charity Commission pages: {len(funders_with_cc_urls)}")
+    print()
     
     # Create semaphore for concurrency control
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_FOUNDATIONS)
@@ -1186,7 +1498,33 @@ async def main(no_db_mode: bool = False):
             process_foundation(name, website_url, semaphore, stats, funder_id=funder_id)
         )
     
-    await asyncio.gather(*tasks)
+    # Progress tracking
+    async def progress_tracker():
+        """Print progress updates every 30 seconds."""
+        while True:
+            await asyncio.sleep(30)
+            elapsed = (datetime.now() - start_time).total_seconds()
+            processed = stats['completed'] + stats['skipped'] + stats['failed']
+            remaining = total_foundations - processed
+            if processed > 0:
+                rate = processed / (elapsed / 3600) if elapsed > 0 else 0
+                eta_seconds = (remaining / rate * 3600) if rate > 0 else 0
+                eta_hours = eta_seconds / 3600
+                print(f"\n📊 Progress: {processed}/{total_foundations} ({processed/total_foundations*100:.1f}%) | "
+                      f"Completed: {stats['completed']} | Skipped: {stats['skipped']} | Failed: {stats['failed']} | "
+                      f"Rate: {rate:.1f}/hr | ETA: {eta_hours:.1f} hours\n")
+    
+    # Start progress tracker
+    progress_task = asyncio.create_task(progress_tracker())
+    
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
     
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
@@ -1196,11 +1534,14 @@ async def main(no_db_mode: bool = False):
     print("="*70)
     print("PIPELINE SUMMARY")
     print("="*70)
-    print(f"Foundations processed: {stats['completed']}/{len(foundations)}")
-    print(f"Skipped (no changes): {stats['skipped']}")
-    print(f"Failed: {stats['failed']}")
-    print(f"Duration: {duration:.1f} seconds ({duration/60:.1f} minutes)")
-    print(f"Rate: {len(foundations)/(duration/3600):.1f} foundations/hour")
+    print(f"Total foundations: {total_foundations}")
+    print(f"  - Completed: {stats['completed']}")
+    print(f"  - Skipped (no changes): {stats['skipped']}")
+    print(f"  - Failed: {stats['failed']}")
+    print(f"Duration: {duration:.1f} seconds ({duration/60:.1f} minutes / {duration/3600:.2f} hours)")
+    if stats['completed'] > 0:
+        print(f"Average time per foundation: {duration/stats['completed']:.1f} seconds")
+        print(f"Processing rate: {stats['completed']/(duration/3600):.1f} foundations/hour")
     print()
     
     # Cost estimate
