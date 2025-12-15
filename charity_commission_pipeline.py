@@ -1100,8 +1100,8 @@ def process_document_with_llmocr_sync(url: str, foundation_name: str, session_co
             # Return None to trigger fallback
             return None
         else:
-        logger.error(f"    ❌ LLMOCR processing failed for {url}: {str(e)}")
-        return None
+            logger.error(f"    ❌ LLMOCR processing failed for {url}: {str(e)}")
+            return None
 
 def process_document_with_azure_documentai_sync(url: str, foundation_name: str, session_cookies: Optional[Dict] = None) -> Optional[Dict]:
     """
