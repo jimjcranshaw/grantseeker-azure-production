@@ -19,6 +19,7 @@ watchdog>=3.0.0
 # OCR
 paddleocr>=2.7.0
 paddlepaddle>=2.5.0
+pymupdf>=1.23.0  # For PDF to image conversion (avoids PDFium crashes)
 
 # Utilities
 requests>=2.31.0

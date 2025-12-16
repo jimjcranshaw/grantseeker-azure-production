@@ -104,6 +104,197 @@ DEEPSEEK_OCR_RATE_LIMIT_DELAY = 0.6  # 100 requests/minute = 0.6 seconds between
 # Use thread-safe initialization with a lock
 _paddleocr_instance = None
 _paddleocr_lock = threading.Lock()
+
+def download_portal_page_pdf(url: str, session_cookies: Optional[Dict] = None, output_path: str = None, max_retries: int = 3) -> Optional[str]:
+    """
+    Download PDF from a Charity Commission portal page URL using browser automation.
+    Portal pages require JavaScript execution to trigger PDF downloads.
+    
+    Args:
+        url: Portal page URL
+        session_cookies: Optional session cookies for authentication
+        output_path: Optional output file path
+        max_retries: Maximum number of retry attempts (default: 3)
+    
+    Returns the path to the downloaded file, or None if failed.
+    """
+    import tempfile
+    import time
+    
+    if output_path is None:
+        temp_file = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
+        output_path = temp_file.name
+        temp_file.close()
+    
+    logger.info(f"    🌐 Downloading portal page PDF: {url[:100]}... (max {max_retries} attempts)")
+    
+    for attempt in range(max_retries):
+        try:
+            from playwright.sync_api import sync_playwright
+            
+            if attempt > 0:
+                wait_time = 2 * attempt  # Exponential backoff: 2s, 4s
+                logger.debug(f"    🔄 Retry {attempt}/{max_retries-1} after {wait_time}s...")
+                time.sleep(wait_time)
+            
+            with sync_playwright() as p:
+                # Launch browser with download support
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context(
+                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    accept_downloads=True
+                )
+                
+                # Set cookies if provided
+                if session_cookies:
+                    cookies = [{'name': k, 'value': v, 'domain': urlparse(url).netloc, 'path': '/'} 
+                              for k, v in session_cookies.items()]
+                    context.add_cookies(cookies)
+                
+                page = context.new_page()
+                
+                # Set up download handler
+                download_path = None
+                download_received = False
+                
+                def handle_download(download):
+                    nonlocal download_path, download_received
+                    try:
+                        download_path = download.path()
+                        download.save_as(output_path)
+                        download_received = True
+                        logger.debug(f"    ✓ Browser download event received")
+                    except Exception as dl_err:
+                        logger.debug(f"    ⚠️ Download handler error: {str(dl_err)[:100]}")
+                
+                page.on("download", handle_download)
+                
+                try:
+                    # Navigate to URL - portal pages often trigger PDF download automatically
+                    response = page.goto(url, wait_until="networkidle", timeout=60000)
+                    
+                    # Wait a bit for JavaScript to trigger download
+                    page.wait_for_timeout(3000)
+                    
+                    # Check if response is already a PDF
+                    if response:
+                        content_type = response.headers.get('content-type', '') if response.headers else ''
+                        if 'pdf' in content_type.lower():
+                            # Response is already PDF, save it
+                            with open(output_path, 'wb') as f:
+                                f.write(response.body())
+                            file_size = os.path.getsize(output_path)
+                            if file_size > 0:
+                                logger.info(f"    ✓ Downloaded {file_size:,} bytes (direct PDF response)")
+                                return output_path
+                    
+                    # If download was triggered, wait for it
+                    if download_received and download_path:
+                        # Wait a bit more for download to complete
+                        page.wait_for_timeout(2000)
+                        if os.path.exists(output_path):
+                            file_size = os.path.getsize(output_path)
+                            if file_size > 0:
+                                logger.info(f"    ✓ Downloaded {file_size:,} bytes via browser download")
+                                return output_path
+                    
+                    # If no automatic download, try to find and click download links
+                    if not download_received:
+                        download_selectors = [
+                            'a[href*="accounts-resource"]',
+                            'a[href*="governing-document-resource"]',
+                            'a[download]',
+                            'button:has-text("Download")',
+                            'a:has-text("Download")',
+                            'a:has-text("View PDF")',
+                        ]
+                        
+                        for selector in download_selectors:
+                            try:
+                                element = page.query_selector(selector)
+                                if element:
+                                    logger.debug(f"    🔍 Found download element, clicking...")
+                                    with page.expect_download(timeout=10000) as download_info:
+                                        element.click()
+                                    
+                                    download = download_info.value
+                                    download.save_as(output_path)
+                                    file_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+                                    if file_size > 0:
+                                        logger.info(f"    ✓ Downloaded {file_size:,} bytes via click")
+                                        return output_path
+                            except Exception as click_err:
+                                logger.debug(f"    ⚠️ Click attempt failed: {str(click_err)[:50]}")
+                                continue
+                    
+                    # Last resort: check if page content is PDF (some pages serve PDF inline)
+                    try:
+                        page_content = page.content()
+                        if page_content.startswith('%PDF'):
+                            # Page content is PDF
+                            with open(output_path, 'wb') as f:
+                                f.write(page_content.encode('utf-8'))
+                            file_size = os.path.getsize(output_path)
+                            if file_size > 0:
+                                logger.info(f"    ✓ Downloaded {file_size:,} bytes (inline PDF)")
+                                return output_path
+                    except:
+                        pass
+                    
+                except Exception as browser_error:
+                    logger.debug(f"    ⚠️ Browser navigation error: {str(browser_error)[:100]}")
+                
+                finally:
+                    try:
+                        page.close()
+                    except:
+                        pass
+                    try:
+                        context.close()
+                    except:
+                        pass
+                    try:
+                        browser.close()
+                    except:
+                        pass
+                
+                # Check if we got a file
+                if os.path.exists(output_path):
+                    file_size = os.path.getsize(output_path)
+                    if file_size > 0:
+                        logger.info(f"    ✓ Downloaded {file_size:,} bytes (attempt {attempt+1}/{max_retries})")
+                        return output_path
+                    else:
+                        if os.path.exists(output_path):
+                            os.remove(output_path)
+            
+            # If we get here, download failed - try again if we have retries left
+            if attempt < max_retries - 1:
+                logger.debug(f"    ⚠️ Download attempt {attempt+1} failed, will retry...")
+                continue
+            else:
+                logger.warning(f"    ⚠️ All {max_retries} download attempts failed")
+                return None
+                    
+        except ImportError:
+            logger.warning("    ⚠️ Playwright not available for browser downloads")
+            return None
+        except Exception as exc:
+            if attempt < max_retries - 1:
+                logger.debug(f"    ⚠️ Download attempt {attempt+1} failed: {str(exc)[:100]}, will retry...")
+                if output_path and os.path.exists(output_path):
+                    os.remove(output_path)
+                continue
+            else:
+                logger.warning(f"    ⚠️ Browser download failed after {max_retries} attempts: {str(exc)[:100]}")
+                if output_path and os.path.exists(output_path):
+                    os.remove(output_path)
+                return None
+    
+    # Should never reach here, but just in case
+    if output_path and os.path.exists(output_path):
+        os.remove(output_path)
+    return None
 # Legacy Docling config (kept for backward compatibility, but not used)
 MAX_CONCURRENT_DOCLING = 2
 DOCLING_TIMEOUT = 900
@@ -469,17 +660,21 @@ async def extract_charity_commission_documents(crawler: AsyncWebCrawler, base_ur
     # Return only 3 documents: first 2 annual accounts + articles of association
     result_docs = []
     
+    logger.info(f"    🔍 Document summary: {len(annual_accounts)} annual accounts, {len(articles_of_association)} articles found")
+    
     # Take first two annual accounts (most recent are usually first)
     if annual_accounts:
         # Take up to 2 annual accounts (most recent first)
         selected_accounts = annual_accounts[:2]
         result_docs.extend(selected_accounts)
-        logger.info(f"    📄 Selected {len(selected_accounts)} annual account(s) (most recent)")
+        logger.info(f"    📄 Selected {len(selected_accounts)} annual account(s) (most recent): {selected_accounts[0][:100]}...")
     
     # Take first articles of association
     if articles_of_association:
         result_docs.append(articles_of_association[0])
-        logger.info(f"    📄 Selected articles of association")
+        logger.info(f"    📄 Selected articles of association: {articles_of_association[0][:100]}...")
+    
+    logger.info(f"    📦 Returning {len(result_docs)} documents for OCR processing")
     
     if len(result_docs) < 3:
         logger.warning(f"    ⚠️ Only found {len(result_docs)}/3 critical documents")
@@ -711,9 +906,10 @@ async def crawl_foundation(url: str, name: str) -> List[Dict]:
                             # For Charity Commission, we should log this as a critical failure
                             logger.error(f"    ❌ [{idx}/{total}] CRITICAL: Document failed after {max_retries+1} attempts: {doc_url[:80]}...")
                             return None
-                        except Exception as e:
+                        except Exception as exc:
                             doc_elapsed = time_module.time() - doc_start
-                            logger.warning(f"    ⚠️ [{idx}/{total}] Failed after {doc_elapsed:.1f}s (attempt {attempt+1}/{max_retries+1}): {e}")
+                            error_msg = str(exc) if exc else "Unknown error"
+                            logger.warning(f"    ⚠️ [{idx}/{total}] Failed after {doc_elapsed:.1f}s (attempt {attempt+1}/{max_retries+1}): {error_msg[:200]}")
                             if attempt < max_retries:
                                 logger.info(f"    🔄 Retrying document in 5 seconds...")
                                 await asyncio.sleep(5)
@@ -978,133 +1174,199 @@ async def process_document_with_docling(url: str, foundation_name: str, session_
 def process_document_with_llmocr_sync(url: str, foundation_name: str, session_cookies: Optional[Dict] = None) -> Optional[Dict]:
     """
     Process document using LLMOCR API (budget-friendly: $0.00449/doc, under $60 budget).
+    Includes retry logic with exponential backoff for transient errors.
     """
+    import base64
+    import time
+    
+    max_retries = 3
+    retry_delays = [5, 15, 30]  # Exponential backoff: 5s, 15s, 30s
+    
+    logger.info(f"    📄 Processing document with LLMOCR: {url[:100]}...")
+    
+    # 1. Download document to temp file (only once, reuse for retries)
+    parsed_url = urlparse(url)
+    filename = os.path.basename(parsed_url.path)
+    if not filename:
+        filename = "document"
+    suffix = Path(filename).suffix
+    if not suffix:
+        suffix = ".pdf"  # Default to pdf if unknown
+    
+    temp_path = None
     try:
-        import base64
+        # Check if this is a portal page URL (requires browser download)
+        is_portal_page = 'p_p_resource_id' in url.lower()
         
-        logger.info(f"    📄 Processing document with LLMOCR: {url[:100]}...")
-        
-        # 1. Download document to temp file
-        parsed_url = urlparse(url)
-        filename = os.path.basename(parsed_url.path)
-        if not filename:
-            filename = "document"
-        suffix = Path(filename).suffix
-        if not suffix:
-            suffix = ".pdf"  # Default to pdf if unknown
-            
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_file:
-            temp_path = tmp_file.name
-            
-            # Download with requests
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/pdf,application/octet-stream,*/*',
-            }
-            
-            try:
-                response = requests.get(url, stream=True, timeout=60, headers=headers, cookies=session_cookies, allow_redirects=True)
-                response.raise_for_status()
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 403:
-                    logger.warning(f"    ⚠️ Got 403, retrying without cookies...")
-                    response = requests.get(url, stream=True, timeout=60, headers=headers, allow_redirects=True)
-                    response.raise_for_status()
+        if is_portal_page:
+            # Use browser to download portal page PDFs
+            logger.debug(f"    🌐 Detected portal page URL, using browser download...")
+            temp_path = download_portal_page_pdf(url, session_cookies)
+            if temp_path and os.path.exists(temp_path):
+                file_size = os.path.getsize(temp_path)
+                if file_size > 0:
+                    logger.info(f"    ✓ Downloaded {file_size:,} bytes via browser")
                 else:
-                    raise
-            
-            file_size = 0
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    tmp_file.write(chunk)
-                    file_size += len(chunk)
-            
-            if file_size == 0:
-                raise ValueError("Downloaded file is empty")
-            
-            logger.debug(f"    Downloaded {file_size:,} bytes")
-                
-        try:
-            # 2. Read file and convert to base64
-            with open(temp_path, 'rb') as f:
-                file_content = f.read()
-            
-            file_base64 = base64.b64encode(file_content).decode('utf-8')
-            
-            # 3. Determine endpoint (try with API key as query parameter)
-            if suffix.lower() == '.pdf':
-                endpoint = f'https://llmocr.com/api/pdf-to-markdown?key={LLMOCR_API_KEY}'
-                mime_type = 'application/pdf'
+                    raise ValueError("Browser download returned empty file")
             else:
-                endpoint = f'https://llmocr.com/api/image-to-markdown?key={LLMOCR_API_KEY}'
-                mime_type = 'image/png'
-            
-            # 4. Call LLMOCR API
-            # Try both methods: query parameter (as per docs) and Bearer token (fallback)
-            api_headers = {
-                'Content-Type': 'application/json',
-            }
-            
-            # LLMOCR API expects document with 'type' and 'document_url' fields
-            # Since we have the file locally, we need to use base64 data URL format
-            # Format: data:[<mediatype>][;base64],<data>
-            data_url = f'data:{mime_type};base64,{file_base64}'
-            
-            payload = {
-                'document': {
-                    'type': 'document_url',
-                    'document_url': data_url
+                raise ValueError("Browser download failed")
+        else:
+            # Regular direct download
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_file:
+                temp_path = tmp_file.name
+                
+                # Download with requests
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'application/pdf,application/octet-stream,*/*',
                 }
-            }
-            
-            # Try with API key in query parameter
-            api_response = requests.post(endpoint, headers=api_headers, json=payload, timeout=120)  # Longer timeout for large PDFs
-            
-            # If that fails, try Bearer token method
-            if api_response.status_code == 401:
-                logger.debug("    Trying Bearer token authentication method...")
-                endpoint_no_key = endpoint.split('?')[0]  # Remove query param
-                api_headers['Authorization'] = f'Bearer {LLMOCR_API_KEY}'
-                api_response = requests.post(endpoint_no_key, headers=api_headers, json=payload, timeout=120)
-            
-            # Log error details for debugging
-            if api_response.status_code != 200:
+                
                 try:
-                    error_detail = api_response.json()
-                    logger.warning(f"    LLMOCR API error ({api_response.status_code}): {error_detail}")
-                except:
-                    logger.warning(f"    LLMOCR API error ({api_response.status_code}): {api_response.text[:500]}")
-            
-            api_response.raise_for_status()
-            
-            result = api_response.json()
-            markdown_content = result.get('markdown', result.get('text', result.get('content', '')))
-            
-            if not markdown_content:
-                logger.warning(f"    ⚠️ LLMOCR returned empty content for {url}")
-                return None
-            
-            # 5. Create page-like structure
-            return {
-                'url': url,
-                'title': f"Document: {filename}",
-                'content': markdown_content[:50000],  # Limit content to 50k chars
-                'depth': 0,
-                'type': 'document'
+                    response = requests.get(url, stream=True, timeout=120, headers=headers, cookies=session_cookies, allow_redirects=True)
+                    response.raise_for_status()
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 403:
+                        logger.warning(f"    ⚠️ Got 403, retrying without cookies...")
+                        response = requests.get(url, stream=True, timeout=120, headers=headers, allow_redirects=True)
+                        response.raise_for_status()
+                    else:
+                        raise
+                
+                file_size = 0
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        tmp_file.write(chunk)
+                        file_size += len(chunk)
+                
+                if file_size == 0:
+                    raise ValueError("Downloaded file is empty")
+                
+                logger.info(f"    ✓ Downloaded {file_size:,} bytes")
+        
+        # 2. Read file and convert to base64 (only once, reuse for retries)
+        with open(temp_path, 'rb') as f:
+            file_content = f.read()
+        
+        file_base64 = base64.b64encode(file_content).decode('utf-8')
+        
+        # 3. Determine endpoint
+        if suffix.lower() == '.pdf':
+            endpoint = f'https://llmocr.com/api/pdf-to-markdown?key={LLMOCR_API_KEY}'
+            mime_type = 'application/pdf'
+        else:
+            endpoint = f'https://llmocr.com/api/image-to-markdown?key={LLMOCR_API_KEY}'
+            mime_type = 'image/png'
+        
+        # 4. Prepare payload (only once, reuse for retries)
+        data_url = f'data:{mime_type};base64,{file_base64}'
+        payload = {
+            'document': {
+                'type': 'document_url',
+                'document_url': data_url
             }
-            
-        finally:
-            # Cleanup temp file
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+        }
+        
+        api_headers = {
+            'Content-Type': 'application/json',
+        }
+        
+        # 5. Retry loop for API calls
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    wait_time = retry_delays[attempt - 1]
+                    logger.info(f"    🔄 Retry {attempt}/{max_retries-1} after {wait_time}s...")
+                    time.sleep(wait_time)
+                
+                # Try with API key in query parameter
+                api_response = requests.post(endpoint, headers=api_headers, json=payload, timeout=180)  # Longer timeout for large PDFs
+                
+                # If that fails, try Bearer token method
+                if api_response.status_code == 401:
+                    logger.debug("    Trying Bearer token authentication method...")
+                    endpoint_no_key = endpoint.split('?')[0]  # Remove query param
+                    api_headers['Authorization'] = f'Bearer {LLMOCR_API_KEY}'
+                    api_response = requests.post(endpoint_no_key, headers=api_headers, json=payload, timeout=180)
+                
+                # Check for retryable errors (500, 502, 503, 429)
+                if api_response.status_code in [500, 502, 503, 429]:
+                    try:
+                        error_detail = api_response.json()
+                        error_msg = str(error_detail)
+                    except:
+                        error_msg = api_response.text[:200]
+                    
+                    last_error = f"LLMOCR API error ({api_response.status_code}): {error_msg}"
+                    
+                    # Check if it's a permanent error (API keys exhausted)
+                    if "API keys exhausted" in error_msg or "exhausted" in error_msg.lower():
+                        logger.warning(f"    ⚠️ {last_error}")
+                        return None  # Don't retry permanent errors
+                    
+                    # For transient errors, continue to retry
+                    if attempt < max_retries - 1:
+                        logger.warning(f"    ⚠️ {last_error} - will retry...")
+                        continue
+                    else:
+                        logger.error(f"    ❌ {last_error} - max retries reached")
+                        return None
+                
+                # Success!
+                if api_response.status_code == 200:
+                    result = api_response.json()
+                    markdown_content = result.get('markdown', result.get('text', result.get('content', '')))
+                    
+                    if not markdown_content:
+                        logger.warning(f"    ⚠️ LLMOCR returned empty content for {url}")
+                        return None
+                    
+                    content_len = len(markdown_content)
+                    logger.info(f"    ✓ LLMOCR extracted {content_len:,} characters")
+                    
+                    # Create page-like structure
+                    return {
+                        'url': url,
+                        'title': f"Document: {filename}",
+                        'content': markdown_content[:50000],  # Limit content to 50k chars
+                        'depth': 0,
+                        'type': 'document'
+                    }
+                
+                # Other non-200 status codes
+                api_response.raise_for_status()
+                
+            except requests.exceptions.Timeout:
+                last_error = f"LLMOCR API timeout (attempt {attempt + 1}/{max_retries})"
+                if attempt < max_retries - 1:
+                    logger.warning(f"    ⚠️ {last_error} - will retry...")
+                    continue
+                else:
+                    logger.error(f"    ❌ {last_error} - max retries reached")
+                    return None
+                    
+            except requests.exceptions.RequestException as e:
+                last_error = f"LLMOCR API request error: {str(e)}"
+                if attempt < max_retries - 1:
+                    logger.warning(f"    ⚠️ {last_error} - will retry...")
+                    continue
+                else:
+                    logger.error(f"    ❌ {last_error} - max retries reached")
+                    return None
+        
+        # All retries exhausted
+        logger.error(f"    ❌ LLMOCR failed after {max_retries} attempts: {last_error}")
+        return None
                 
     except Exception as e:
         error_msg = str(e)
-        # Check if it's an API key exhaustion error (500) or other error
-        if "500" in error_msg or "API keys exhausted" in error_msg or "statusText" in error_msg:
-            logger.warning(f"    ⚠️ LLMOCR backend unavailable for {url}: {error_msg[:100]}")
-            # Return None to trigger fallback
-            return None
+        logger.error(f"    ❌ LLMOCR processing failed for {url}: {error_msg[:200]}")
+        return None
+        
+    finally:
+        # Cleanup temp file
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
         else:
             logger.error(f"    ❌ LLMOCR processing failed for {url}: {str(e)}")
             return None
@@ -1394,12 +1656,18 @@ def process_document_with_paddleocr_sync(url: str, foundation_name: str, session
     """
     Process document using PaddleOCR (FREE, open-source, local processing).
     No API keys needed - runs locally. Good fallback when cloud services fail.
+    
+    Strategy: Convert PDFs to images first to avoid PDFium crashes, then OCR the images.
     Uses a cached PaddleOCR instance to avoid re-initialization overhead.
     """
     global _paddleocr_instance
     
+    temp_path = None
+    temp_image_files = []
+    
     try:
         from paddleocr import PaddleOCR
+        import fitz  # PyMuPDF for PDF to image conversion
         
         logger.info(f"    📄 Processing document with PaddleOCR (free, local): {url[:100]}...")
         
@@ -1408,96 +1676,144 @@ def process_document_with_paddleocr_sync(url: str, foundation_name: str, session
         filename = os.path.basename(parsed_url.path)
         if not filename:
             filename = "document"
-        suffix = Path(filename).suffix
+        suffix = Path(filename).suffix.lower()
         if not suffix:
             suffix = ".pdf"  # Default to pdf if unknown
             
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_file:
-            temp_path = tmp_file.name
-            
-            # Download with requests (increased timeout for slow downloads)
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/pdf,application/octet-stream,*/*',
-            }
-            
-            try:
-                response = requests.get(url, stream=True, timeout=120, headers=headers, cookies=session_cookies, allow_redirects=True)
-                response.raise_for_status()
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 403:
-                    logger.warning(f"    ⚠️ Got 403, retrying without cookies...")
-                    response = requests.get(url, stream=True, timeout=120, headers=headers, allow_redirects=True)
-                    response.raise_for_status()
+        # Check if this is a portal page URL (requires browser download)
+        is_portal_page = 'p_p_resource_id' in url.lower()
+        
+        if is_portal_page:
+            # Use browser to download portal page PDFs
+            logger.debug(f"    🌐 Detected portal page URL, using browser download...")
+            temp_path = download_portal_page_pdf(url, session_cookies)
+            if temp_path and os.path.exists(temp_path):
+                file_size = os.path.getsize(temp_path)
+                if file_size > 0:
+                    logger.info(f"    ✓ Downloaded {file_size:,} bytes via browser")
                 else:
-                    raise
-            except requests.exceptions.Timeout:
-                logger.error(f"    ❌ Download timeout for {url[:80]}...")
-                raise
-            
-            file_size = 0
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    tmp_file.write(chunk)
-                    file_size += len(chunk)
-            
-            if file_size == 0:
-                raise ValueError("Downloaded file is empty")
-            
-            logger.info(f"    ✓ Downloaded {file_size:,} bytes")
+                    raise ValueError("Browser download returned empty file")
+            else:
+                raise ValueError("Browser download failed")
+        else:
+            # Regular direct download
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_file:
+                temp_path = tmp_file.name
                 
+                # Download with requests (increased timeout for slow downloads)
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'application/pdf,application/octet-stream,*/*',
+                }
+                
+                try:
+                    response = requests.get(url, stream=True, timeout=120, headers=headers, cookies=session_cookies, allow_redirects=True)
+                    response.raise_for_status()
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 403:
+                        logger.warning(f"    ⚠️ Got 403, retrying without cookies...")
+                        response = requests.get(url, stream=True, timeout=120, headers=headers, allow_redirects=True)
+                        response.raise_for_status()
+                    else:
+                        raise
+                except requests.exceptions.Timeout:
+                    logger.error(f"    ❌ Download timeout for {url[:80]}...")
+                    raise
+                
+                file_size = 0
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        tmp_file.write(chunk)
+                        file_size += len(chunk)
+                
+                if file_size == 0:
+                    raise ValueError("Downloaded file is empty")
+                
+                logger.info(f"    ✓ Downloaded {file_size:,} bytes")
+        
         try:
-            # 2. Initialize PaddleOCR (thread-safe cached globally to avoid re-initialization)
-            global _paddleocr_instance
+            # 2. Initialize PaddleOCR (thread-safe cached globally)
             if _paddleocr_instance is None:
                 with _paddleocr_lock:
                     # Double-check pattern to avoid race conditions
                     if _paddleocr_instance is None:
                         logger.info(f"    🔧 Initializing PaddleOCR (first time, may take a moment)...")
-                        _paddleocr_instance = PaddleOCR(use_textline_orientation=True, lang='en')
+                        # Use simpler config to avoid crashes
+                        _paddleocr_instance = PaddleOCR(
+                            use_angle_cls=True,
+                            lang='en',
+                            show_log=False  # Reduce logging noise
+                        )
                         logger.info(f"    ✓ PaddleOCR initialized successfully")
             ocr = _paddleocr_instance
             
-            # 3. Process PDF - PaddleOCR can handle PDFs directly
-            # Use predict() method as recommended (ocr() is deprecated)
-            logger.debug(f"    🔍 Running PaddleOCR on {suffix} file ({file_size:,} bytes)...")
-            try:
-                # Try predict() first (newer API) - predict() expects input parameter
-                result = ocr.predict(input=temp_path)
-            except (AttributeError, TypeError, Exception) as e:
-                # Fallback to ocr() if predict() doesn't work
-                logger.debug(f"    ⚠️ predict() failed ({str(e)[:50]}), using ocr() fallback...")
-                result = ocr.ocr(temp_path)
+            # 3. Convert PDF to images (to avoid PDFium crashes)
+            image_paths = []
+            if suffix == '.pdf':
+                logger.debug(f"    🔍 Converting PDF to images (safer than direct PDF processing)...")
+                try:
+                    pdf_doc = fitz.open(temp_path)
+                    max_pages = min(50, len(pdf_doc))  # Limit to 50 pages to avoid memory issues
+                    
+                    for page_num in range(max_pages):
+                        page = pdf_doc[page_num]
+                        # Render page as image (300 DPI for good quality)
+                        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x zoom = ~144 DPI
+                        
+                        # Save as temporary PNG
+                        temp_img = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+                        temp_img_path = temp_img.name
+                        pix.save(temp_img_path)
+                        temp_image_files.append(temp_img_path)
+                        image_paths.append(temp_img_path)
+                        
+                    pdf_doc.close()
+                    logger.info(f"    ✓ Converted {len(image_paths)} PDF pages to images")
+                    
+                except Exception as e:
+                    logger.warning(f"    ⚠️ PDF to image conversion failed: {str(e)[:100]}")
+                    # Fallback: try direct PDF processing (may crash, but worth trying)
+                    logger.debug(f"    🔄 Falling back to direct PDF processing...")
+                    image_paths = [temp_path]
+            else:
+                # For non-PDF files (images), use directly
+                image_paths = [temp_path]
             
-            logger.debug(f"    ✓ PaddleOCR processing completed, extracting text...")
+            # 4. Process each image with PaddleOCR
+            logger.debug(f"    🔍 Running PaddleOCR on {len(image_paths)} image(s)...")
+            all_text_lines = []
             
-            # 4. Extract text from OCR results
-            # PaddleOCR returns: [[[bbox, (text, confidence)], ...], ...] for each page
-            text_lines = []
-            if result:
-                # Handle different result formats
-                if isinstance(result, list) and len(result) > 0:
-                    for page_result in result:
-                        if page_result:
-                            for line in page_result:
-                                if line and len(line) >= 2:
-                                    text_content = line[1][0] if isinstance(line[1], tuple) else str(line[1])
-                                    confidence = line[1][1] if isinstance(line[1], tuple) and len(line[1]) > 1 else 1.0
+            for img_idx, img_path in enumerate(image_paths):
+                try:
+                    # Use ocr() method (most stable)
+                    result = ocr.ocr(img_path, cls=True)  # cls=True enables text direction classification
+                    
+                    # Extract text from OCR results
+                    # PaddleOCR returns: [[[bbox, (text, confidence)], ...], ...] for each page
+                    if result and len(result) > 0:
+                        for line_result in result[0]:  # result[0] is the first (and only) page
+                            if line_result and len(line_result) >= 2:
+                                text_info = line_result[1]
+                                if isinstance(text_info, tuple) and len(text_info) >= 1:
+                                    text_content = text_info[0]
+                                    confidence = text_info[1] if len(text_info) > 1 else 1.0
                                     # Only include lines with reasonable confidence
-                                    if confidence > 0.5:
-                                        text_lines.append(text_content)
-                else:
-                    logger.warning(f"    ⚠️ Unexpected PaddleOCR result format: {type(result)}")
+                                    if confidence > 0.3:  # Lower threshold for better coverage
+                                        all_text_lines.append(text_content)
+                
+                except Exception as e:
+                    logger.warning(f"    ⚠️ PaddleOCR failed on image {img_idx + 1}/{len(image_paths)}: {str(e)[:100]}")
+                    continue  # Continue with next image
             
-            if not text_lines:
-                logger.warning(f"    ⚠️ PaddleOCR returned no text for {url} (result: {type(result)}, length: {len(result) if result else 0})")
+            if not all_text_lines:
+                logger.warning(f"    ⚠️ PaddleOCR returned no text for {url}")
                 return None
             
             # 5. Combine text and format as markdown
-            text_content = "\n".join(text_lines)
+            text_content = "\n".join(all_text_lines)
             markdown_content = f"```\n{text_content}\n```"
             
-            logger.info(f"    ✓ PaddleOCR extracted {len(text_lines)} text lines ({len(text_content):,} chars) from {url[:80]}...")
+            logger.info(f"    ✓ PaddleOCR extracted {len(all_text_lines)} text lines ({len(text_content):,} chars) from {url[:80]}...")
             
             # 6. Create page-like structure
             return {
@@ -1509,54 +1825,60 @@ def process_document_with_paddleocr_sync(url: str, foundation_name: str, session
             }
             
         finally:
-            # Cleanup temp file
-            if os.path.exists(temp_path):
+            # Cleanup temp files
+            if temp_path and os.path.exists(temp_path):
                 os.remove(temp_path)
+            for img_path in temp_image_files:
+                if os.path.exists(img_path):
+                    os.remove(img_path)
                 
-    except ImportError:
-        logger.debug("    ⚠️ PaddleOCR not installed. Install with: pip install paddleocr")
+    except ImportError as e:
+        missing_module = str(e).split("'")[1] if "'" in str(e) else "unknown"
+        if missing_module == "paddleocr":
+            logger.debug("    ⚠️ PaddleOCR not installed. Install with: pip install paddleocr")
+        elif missing_module == "fitz":
+            logger.debug("    ⚠️ PyMuPDF not installed. Install with: pip install pymupdf")
+        else:
+            logger.debug(f"    ⚠️ Missing module: {missing_module}")
         return None
     except Exception as e:
-        logger.warning(f"    ⚠️ PaddleOCR processing failed for {url}: {str(e)}")
+        error_msg = str(e)
+        # Don't log segmentation faults as errors (they're expected with problematic PDFs)
+        if "Segmentation fault" in error_msg or "SIGSEGV" in error_msg:
+            logger.debug(f"    ⚠️ PaddleOCR crashed (likely problematic PDF): {url[:80]}...")
+        else:
+            logger.warning(f"    ⚠️ PaddleOCR processing failed for {url}: {error_msg[:200]}")
         return None
 
 def process_document_with_ocr_sync(url: str, foundation_name: str, session_cookies: Optional[Dict] = None) -> Optional[Dict]:
     """
-    Main OCR processing function - routes to appropriate provider based on configuration.
-    Priority: LLMOCR (CHEAPEST) > PaddleOCR (FREE fallback) > Azure Document Intelligence > Google Cloud Document AI > DeepSeek OCR
+    Main OCR processing function - uses PaddleOCR as primary (FREE, local, reliable).
     
-    If LLMOCR fails (e.g., backend API keys exhausted), automatically falls back to PaddleOCR.
+    Priority: PaddleOCR (FREE, local) > LLMOCR (fallback if PaddleOCR fails)
+    
+    PaddleOCR runs locally (free) and converts PDFs to images first to avoid crashes.
+    LLMOCR is only used as fallback if PaddleOCR completely fails.
     """
-    # Try LLMOCR first (CHEAPEST: $0.00449/doc = $53.88 for 12k docs, 82% cheaper than Azure/GCP)
+    # Use PaddleOCR as primary (FREE, local, no API keys needed)
+    # PaddleOCR converts PDFs to images to avoid crashes and is more reliable
+    try:
+        result = process_document_with_paddleocr_sync(url, foundation_name, session_cookies)
+        if result:
+            logger.info(f"    ✓ PaddleOCR (local) successfully processed document")
+            return result
+    except Exception as e:
+        logger.debug(f"    PaddleOCR (local) failed: {str(e)[:100]}")
+    
+    # Fallback to LLMOCR only if PaddleOCR fails completely
+    # LLMOCR has built-in retry logic (3 attempts with exponential backoff)
     if LLMOCR_API_KEY:
+        logger.info(f"    🔄 PaddleOCR failed, trying LLMOCR as fallback...")
         result = process_document_with_llmocr_sync(url, foundation_name, session_cookies)
-        # If LLMOCR fails due to backend issues, try PaddleOCR as backup
-        if result is None:
-            logger.info(f"    🔄 LLMOCR failed, trying PaddleOCR backup (free, local)...")
-            result = process_document_with_paddleocr_sync(url, foundation_name, session_cookies)
-            if result:
-                return result
-        elif result:
+        if result:
             return result
     
-    # Try PaddleOCR as primary if LLMOCR not configured (FREE, open-source)
-    result = process_document_with_paddleocr_sync(url, foundation_name, session_cookies)
-    if result:
-        return result
-    
-    # Fall back to Azure Document Intelligence ($1.50/1k pages = $306 for 12k docs)
-    if AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT and AZURE_DOCUMENT_INTELLIGENCE_KEY:
-        return process_document_with_azure_documentai_sync(url, foundation_name, session_cookies)
-    
-    # Fall back to Google Cloud Document AI ($1.50/1k pages = $306 for 12k docs)
-    if GOOGLE_APPLICATION_CREDENTIALS and GCP_PROJECT_ID and GCP_PROCESSOR_ID:
-        return process_document_with_gcp_documentai_sync(url, foundation_name, session_cookies)
-    
-    # Fall back to DeepSeek OCR
-    if DEEPSEEK_OCR_API_KEY or DEEPSEEK_OCR_BASE_URL:
-        return process_document_with_deepseek_ocr_sync(url, foundation_name, session_cookies)
-    
-    logger.error("    ❌ No OCR provider configured. Set LLMOCR_API_KEY (cheapest), install PaddleOCR (free), AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT+KEY, GOOGLE_APPLICATION_CREDENTIALS+GCP_PROJECT_ID+GCP_PROCESSOR_ID, or DEEPSEEK_OCR_API_KEY")
+    # If both fail, skip the document
+    logger.warning(f"    ⚠️ All OCR providers failed for {url[:80]}... - skipping document")
     return None
 
 def process_document_with_deepseek_ocr_sync(url: str, foundation_name: str, session_cookies: Optional[Dict] = None) -> Optional[Dict]:
@@ -1675,10 +1997,15 @@ def process_document_with_deepseek_ocr_sync(url: str, foundation_name: str, sess
                 os.remove(temp_path)
                 
     except ImportError:
-        logger.error("    ❌ DeepSeek OCR not installed. Please install 'deepseek-ocr' to process documents.")
+        logger.debug("    ⚠️ DeepSeek OCR not installed. Install with: pip install deepseek-ocr")
         return None
     except Exception as e:
-        logger.error(f"    ❌ DeepSeek OCR processing failed for {url}: {str(e)}")
+        error_msg = str(e)
+        # Don't log as error if it's just not available (connection refused, etc.)
+        if "Connection" in error_msg or "refused" in error_msg.lower() or "localhost" in error_msg.lower():
+            logger.debug(f"    ⚠️ DeepSeek OCR local server not available: {error_msg[:100]}")
+        else:
+            logger.warning(f"    ⚠️ DeepSeek OCR processing failed: {error_msg[:200]}")
         return None
 
 async def process_document_with_deepseek_ocr(url: str, foundation_name: str, session_cookies: Optional[Dict] = None) -> Optional[Dict]:
@@ -2232,9 +2559,54 @@ def load_foundations_from_csv(csv_path: str) -> List[tuple[str, str]]:
 
     return foundations
 
-def load_funders_with_charity_commission_urls(limit: Optional[int] = None) -> List[tuple[int, str, str]]:
+def count_documents_for_funder(funder_id: int) -> int:
+    """
+    Count how many documents have been successfully processed for a funder.
+    Returns the count of documents (chunks with type='document') for this funder.
+    Documents are stored as chunks with source_url containing document URLs.
+    """
+    if not is_db_available():
+        return 0
+    
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        # Count distinct document URLs from funder_chunks
+        # Documents are identified by having 'p_p_resource_id' or '.pdf' in source_url
+        query = """
+            SELECT COUNT(DISTINCT fc.source_url)
+            FROM funder_chunks fc
+            JOIN scrape_sessions s ON fc.scrape_session_id = s.id
+            WHERE s.funder_id = %s 
+            AND fc.source_url IS NOT NULL
+            AND (
+                fc.source_url LIKE '%%p_p_resource_id%%' 
+                OR fc.source_url LIKE '%%.pdf%%'
+                OR fc.source_url LIKE '%%accounts-resource%%'
+                OR fc.source_url LIKE '%%governing-document-resource%%'
+            )
+            AND LENGTH(fc.chunk_text) > 1000
+        """
+        cursor.execute(query, (funder_id,))
+        result = cursor.fetchone()
+        count = int(result[0]) if result and result[0] is not None else 0
+        cursor.close()
+        return count
+    except Exception as e:
+        logger.debug(f"    Error counting documents for funder {funder_id}: {str(e)[:100]}")
+        return 0
+    finally:
+        release_db_connection(conn)
+
+def load_funders_with_charity_commission_urls(limit: Optional[int] = None, skip_complete: bool = True) -> List[tuple[int, str, str]]:
     """
     Load funders from database that have Charity Commission URLs as their website.
+    Optionally skip funders that already have 2 documents processed.
+    
+    Args:
+        limit: Optional limit on number of funders to return
+        skip_complete: If True, skip funders that already have 2 documents processed
+    
     Returns list of (funder_id, name, website_url) tuples.
     """
     if not is_db_available():
@@ -2249,15 +2621,63 @@ def load_funders_with_charity_commission_urls(limit: Optional[int] = None) -> Li
             FROM funders 
             WHERE website LIKE 'https://register-of-charities.charitycommission.gov.uk/%'
         """
-        if limit:
-            query += f" LIMIT {limit}"
         
         cursor.execute(query)
-        results = cursor.fetchall()
+        all_results = cursor.fetchall()
+        
+        funders = []
+        skipped_count = 0
+        
+        # If skipping complete funders, batch query document counts for efficiency
+        if skip_complete and all_results:
+            # Get all funder IDs
+            funder_ids = [row[0] for row in all_results]
+            
+            # Batch query: get document counts for all funders at once
+            cursor.execute("""
+                SELECT s.funder_id, COUNT(DISTINCT fc.source_url) as doc_count
+                FROM funder_chunks fc
+                JOIN scrape_sessions s ON fc.scrape_session_id = s.id
+                WHERE s.funder_id = ANY(%s)
+                AND fc.source_url IS NOT NULL
+                AND (
+                    fc.source_url LIKE '%%p_p_resource_id%%' 
+                    OR fc.source_url LIKE '%%.pdf%%'
+                    OR fc.source_url LIKE '%%accounts-resource%%'
+                    OR fc.source_url LIKE '%%governing-document-resource%%'
+                )
+                AND LENGTH(fc.chunk_text) > 1000
+                GROUP BY s.funder_id
+            """, (funder_ids,))
+            
+            doc_counts = {row[0]: row[1] for row in cursor.fetchall()}
+        else:
+            doc_counts = {}
+        
+        for row in all_results:
+            funder_id, name, website = row[0], row[1], row[2]
+            
+            # Check if we should skip this funder
+            if skip_complete:
+                doc_count = doc_counts.get(funder_id, 0)
+                if doc_count >= 2:
+                    skipped_count += 1
+                    if skipped_count <= 10:  # Only log first 10 to avoid spam
+                        logger.debug(f"  ⏭️  Skipping {name} (already has {doc_count} documents)")
+                    continue
+            
+            funders.append((funder_id, name, website))
+            
+            # Apply limit after filtering
+            if limit and len(funders) >= limit:
+                break
+        
         cursor.close()
         
-        funders = [(row[0], row[1], row[2]) for row in results]
         logger.info(f"Loaded {len(funders)} funders with Charity Commission URLs")
+        if skip_complete and skipped_count > 0:
+            logger.info(f"  ⏭️  Skipped {skipped_count} funders that already have 2 documents")
+        
         return funders
     finally:
         release_db_connection(conn)
@@ -2391,9 +2811,10 @@ async def main(no_db_mode: bool = False, force: bool = False):
     
     # Load ONLY funders with Charity Commission URLs (skip regular websites)
     # This is specifically for processing Charity Commission pages only
+    # Skip funders that already have 2 documents processed (requeue incomplete ones)
     # Remove limit for production runs (only use limit in test mode)
     limit = None if not TEST_MODE else TEST_FOUNDATIONS_COUNT
-    funders_with_cc_urls = load_funders_with_charity_commission_urls(limit=limit)
+    funders_with_cc_urls = load_funders_with_charity_commission_urls(limit=limit, skip_complete=True)
     
     if not funders_with_cc_urls:
         logger.error("No funders with Charity Commission URLs found. Exiting.")
