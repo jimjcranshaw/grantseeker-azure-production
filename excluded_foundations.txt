@@ -1,0 +1,31 @@
+# Foundations EXCLUDED due to wrong/unusable URLs
+# These need manual URL lookup
+
+# Bible reference sites (not foundation websites)
+THE POOR'S LAND,https://biblehub.com/topical/t/the_poor_of_the_land.htm
+YOUR PEOPLE MY PEOPLE,https://biblehub.com/ruth/1-16.htm
+BIBLE IN ACTION TRUST,https://biblehub.com/topical/b/balance_of_trust_and_action.htm
+THE POOR'S LANDS,https://biblehub.com/topical/t/the_poor_of_the_land.htm
+The Chasah Trust,https://biblehub.com/hebrew/2620.htm
+PARACLETOS,https://biblehub.com/greek/3875.htm
+HELP ANIYIM,https://biblehub.com/hebrew/aniyim_6041.htm
+
+# Social media profiles (won't have grant info)
+LOVEBRUM,https://www.instagram.com/lovebrumcharity/
+ELIJAH TRUST,https://www.instagram.com/elijahtrust/
+LAMPTEY FOUNDATION,https://www.instagram.com/tariqlampteyfoundation/
+
+# Travel/commercial sites (wrong URL)
+GO AFRICA,https://www.go2africa.com/
+
+# Medical directory (not foundation website)
+THE SARVAJANIK MEDICAL TRUST,https://www.sehat.com/the-sarvajanik-medical-trust-surat
+
+# Gift basket site (wrong URL)
+KEREN CHASANIM,https://www.stunningbaskets.com/
+
+# Companies House payment portal (not charity info)
+DAJTRAIN LIMITED,https://pay.company-information.service.gov.uk/company/01657236
+
+# News article (not foundation website)
+THE DARELL-BROWN,https://teamhcso.com/News/PressRelease/13a08a9a-a9c4-4ec9-a41a-cc953446b503/en-US
